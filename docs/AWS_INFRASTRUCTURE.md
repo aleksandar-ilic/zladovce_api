@@ -1,4 +1,4 @@
-﻿# ZLADOVCE – AWS INFRASTRUCTURE
+# ZLADOVCE – AWS INFRASTRUCTURE
 
 > Part of the Zladovce master specification. Related documents:
 > [PROJECT_SPECIFICATION](PROJECT_SPECIFICATION.md) · [ARCHITECTURE](ARCHITECTURE.md) · [DATABASE](DATABASE.md) · [API_SPECIFICATION](API_SPECIFICATION.md) · [IMPLEMENTATION_PLAN](IMPLEMENTATION_PLAN.md)
@@ -181,7 +181,7 @@ Lambdas inside the VPC need to reach SES, Cognito (admin user management) and Se
 | Data | Seed/test data | Test data, never real customer data | Real data |
 | Deploy | On demand | Automatic from `main` | Manual approval of a version already on staging |
 
-Recommended: separate AWS accounts for production and non-production (open question). Configuration differs only through CDK context and environment variables; no secrets in frontend builds — the frontend receives only public values (API URL, Cognito pool id and client id, media URL).
+All three environments share the business's single AWS account (decided 2026-11-14). They are isolated by per-environment stack names (`Zladovce-<Env>-*`), resource names, tags and IAM policies scoped to each environment's resources; staging and dev should be torn down or stopped when not in use to keep costs and blast radius low. Configuration differs only through CDK context and environment variables; no secrets in frontend builds — the frontend receives only public values (API URL, Cognito pool id and client id, media URL).
 
 ## W7. CI/CD
 

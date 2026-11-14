@@ -1,4 +1,4 @@
-﻿# ZLADOVCE – IMPLEMENTATION PLAN
+# ZLADOVCE – IMPLEMENTATION PLAN
 
 > Part of the Zladovce master specification. Related documents:
 > [PROJECT_SPECIFICATION](PROJECT_SPECIFICATION.md) · [ARCHITECTURE](ARCHITECTURE.md) · [DATABASE](DATABASE.md) · [API_SPECIFICATION](API_SPECIFICATION.md) · [AWS_INFRASTRUCTURE](AWS_INFRASTRUCTURE.md)
@@ -269,7 +269,7 @@ These are in effect unless the business says otherwise.
 | A15 | Source control and CI/CD on GitHub |
 | A16 | AWS region `eu-central-1`; no RDS Proxy and a small NAT instance at launch |
 | A17 | Phone numbers are validated as Serbian numbers (`+381…` or `06…`), postal codes as five digits |
-| A18 | The current site's data is not migrated; products are entered fresh in the admin |
+| A18 | The current site's data is not migrated; products are entered fresh in the admin. For local development the five products from the current site are loaded as marked test data (`backend/scripts/seed-dev-catalog.ps1`, answered 2026-11-14) |
 | A19 | The word "organski" and similar claims are left out of all copy until certification is confirmed |
 
 ## R4. Open questions for the business
@@ -279,8 +279,8 @@ Ordered by how much they block.
 ### Needed before Phase 2 finishes
 
 1. **Domain and DNS:** who controls DNS for `zladovce.com`, and can records be added (needed for email sending, certificates and the new site)?
-2. **AWS account:** is there an existing AWS account, and who will own and pay for it? Is a separate account for production acceptable?
-3. **Source control:** is GitHub acceptable, and under whose account or organisation?
+2. ~~**AWS account:** is there an existing AWS account, and who will own and pay for it? Is a separate account for production acceptable?~~ **Answered 2026-11-14:** there is one AWS account; all environments share it. Access for deployment has not been set up yet.
+3. ~~**Source control:** is GitHub acceptable, and under whose account or organisation?~~ **Answered 2026-11-14:** GitHub, https://github.com/aleksandar-ilic/zladovce_api (backend, infrastructure, docs) and https://github.com/aleksandar-ilic/zladovce_web (frontend).
 4. **Monthly budget:** is roughly 30–40 USD per month for production acceptable, plus staging while it is running?
 
 ### Needed before Phases 3–5
