@@ -620,6 +620,141 @@ namespace Zladovce.Infrastructure.Persistence.Migrations
                         });
                 });
 
+            modelBuilder.Entity("Zladovce.Domain.Notifications.EmailLog", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<int>("AttemptNumber")
+                        .HasColumnType("integer")
+                        .HasColumnName("attempt_number");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("Error")
+                        .HasColumnType("text")
+                        .HasColumnName("error");
+
+                    b.Property<Guid>("OutboxId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("outbox_id");
+
+                    b.Property<string>("SesMessageId")
+                        .HasColumnType("text")
+                        .HasColumnName("ses_message_id");
+
+                    b.Property<bool>("Succeeded")
+                        .HasColumnType("boolean")
+                        .HasColumnName("succeeded");
+
+                    b.HasKey("Id")
+                        .HasName("pk_email_logs");
+
+                    b.HasIndex("OutboxId")
+                        .HasDatabaseName("ix_email_logs_outbox_id");
+
+                    b.ToTable("email_logs", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_email_logs_attempt_number", "attempt_number > 0");
+                        });
+                });
+
+            modelBuilder.Entity("Zladovce.Domain.Notifications.EmailOutboxMessage", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<int>("AttemptCount")
+                        .HasColumnType("integer")
+                        .HasColumnName("attempt_count");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("DedupKey")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("dedup_key");
+
+                    b.Property<byte[]>("EncryptedToken")
+                        .HasColumnType("bytea")
+                        .HasColumnName("encrypted_token");
+
+                    b.Property<string>("LastError")
+                        .HasColumnType("text")
+                        .HasColumnName("last_error");
+
+                    b.Property<DateTimeOffset?>("LockedUntil")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("locked_until");
+
+                    b.Property<DateTimeOffset>("NextAttemptAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("next_attempt_at");
+
+                    b.Property<Guid?>("OrderId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("order_id");
+
+                    b.Property<string>("Payload")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("payload");
+
+                    b.Property<string>("Recipient")
+                        .IsRequired()
+                        .HasColumnType("citext")
+                        .HasColumnName("recipient");
+
+                    b.Property<DateTimeOffset?>("SentAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("sent_at");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("status");
+
+                    b.Property<string>("Template")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("template");
+
+                    b.HasKey("Id")
+                        .HasName("pk_email_outbox");
+
+                    b.HasIndex("DedupKey")
+                        .IsUnique()
+                        .HasDatabaseName("ix_email_outbox_dedup_key");
+
+                    b.HasIndex("NextAttemptAt")
+                        .HasDatabaseName("ix_email_outbox_due")
+                        .HasFilter("status IN ('Pending', 'Processing')");
+
+                    b.HasIndex("OrderId", "CreatedAt")
+                        .HasDatabaseName("ix_email_outbox_order_id_created_at");
+
+                    b.HasIndex("Status", "CreatedAt")
+                        .IsDescending(false, true)
+                        .HasDatabaseName("ix_email_outbox_status_created_at");
+
+                    b.ToTable("email_outbox", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_email_outbox_attempt_count", "attempt_count >= 0");
+
+                            t.HasCheckConstraint("ck_email_outbox_sent", "(status = 'Sent') = (sent_at IS NOT NULL)");
+
+                            t.HasCheckConstraint("ck_email_outbox_status", "status IN ('Pending', 'Processing', 'Sent', 'Dead')");
+
+                            t.HasCheckConstraint("ck_email_outbox_template", "template IN ('OrderReceived', 'OrderAccepted', 'OrderPreparing', 'OrderShipped', 'OrderDelivered', 'OrderCancelled')");
+                        });
+                });
+
             modelBuilder.Entity("Zladovce.Domain.Orders.Order", b =>
                 {
                     b.Property<Guid>("Id")
@@ -1140,6 +1275,49 @@ namespace Zladovce.Infrastructure.Persistence.Migrations
                         });
                 });
 
+            modelBuilder.Entity("Zladovce.Domain.Tracking.OrderTrackingToken", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<DateTimeOffset?>("LastUsedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("last_used_at");
+
+                    b.Property<Guid>("OrderId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("order_id");
+
+                    b.Property<DateTimeOffset?>("RevokedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("revoked_at");
+
+                    b.Property<byte[]>("TokenHash")
+                        .IsRequired()
+                        .HasColumnType("bytea")
+                        .HasColumnName("token_hash");
+
+                    b.HasKey("Id")
+                        .HasName("pk_order_tracking_tokens");
+
+                    b.HasIndex("OrderId")
+                        .HasDatabaseName("ix_order_tracking_tokens_order_id");
+
+                    b.HasIndex("TokenHash")
+                        .IsUnique()
+                        .HasDatabaseName("ix_order_tracking_tokens_token_hash");
+
+                    b.ToTable("order_tracking_tokens", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_order_tracking_tokens_token_hash", "octet_length(token_hash) = 32");
+                        });
+                });
+
             modelBuilder.Entity("Zladovce.Infrastructure.RateLimiting.RateLimitBucket", b =>
                 {
                     b.Property<string>("BucketKey")
@@ -1247,6 +1425,25 @@ namespace Zladovce.Infrastructure.Persistence.Migrations
                         .HasConstraintName("fk_inventory_movements_product_variants_variant_id");
                 });
 
+            modelBuilder.Entity("Zladovce.Domain.Notifications.EmailLog", b =>
+                {
+                    b.HasOne("Zladovce.Domain.Notifications.EmailOutboxMessage", null)
+                        .WithMany()
+                        .HasForeignKey("OutboxId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_email_logs_email_outbox_outbox_id");
+                });
+
+            modelBuilder.Entity("Zladovce.Domain.Notifications.EmailOutboxMessage", b =>
+                {
+                    b.HasOne("Zladovce.Domain.Orders.Order", null)
+                        .WithMany()
+                        .HasForeignKey("OrderId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_email_outbox_orders_order_id");
+                });
+
             modelBuilder.Entity("Zladovce.Domain.Orders.Order", b =>
                 {
                     b.HasOne("Zladovce.Domain.Customers.Customer", null)
@@ -1338,6 +1535,16 @@ namespace Zladovce.Infrastructure.Persistence.Migrations
                         .HasForeignKey("UpdatedByAdminId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .HasConstraintName("fk_store_settings_admin_users_updated_by_admin_id");
+                });
+
+            modelBuilder.Entity("Zladovce.Domain.Tracking.OrderTrackingToken", b =>
+                {
+                    b.HasOne("Zladovce.Domain.Orders.Order", null)
+                        .WithMany()
+                        .HasForeignKey("OrderId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_order_tracking_tokens_orders_order_id");
                 });
 
             modelBuilder.Entity("Zladovce.Domain.Catalog.Product", b =>

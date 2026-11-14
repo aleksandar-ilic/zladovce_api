@@ -39,3 +39,10 @@ public sealed class CheckoutStore(ZladovceDbContext db) : ICheckoutStore
         return values.Single();
     }
 }
+
+/// <summary><see cref="IOrderLocks"/> on the request's context (joins its transaction).</summary>
+public sealed class OrderLocks(ZladovceDbContext db) : IOrderLocks
+{
+    public async Task LockAsync(Guid orderId, CancellationToken cancellationToken) =>
+        await db.Database.ExecuteSqlAsync($"SELECT id FROM orders WHERE id = {orderId} FOR UPDATE", cancellationToken);
+}

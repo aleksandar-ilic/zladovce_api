@@ -4,6 +4,7 @@ using Zladovce.Application.Common;
 using Zladovce.Application.Common.Errors;
 using Zladovce.Application.Common.Paging;
 using Zladovce.Application.Inventory;
+using Zladovce.Application.Notifications;
 using Zladovce.Domain.Common;
 using Zladovce.Domain.Inventory;
 using Zladovce.Domain.Orders;
@@ -28,6 +29,8 @@ public sealed class OrderAdminService(
     IInventoryService inventory,
     IRequestContext requestContext,
     IAuditLogger audit,
+    IOrderNotifier notifier,
+    IAdminEmailService emails,
     TimeProvider timeProvider) : IOrderAdminService
 {
     public const string AuditEntityType = "Order";
@@ -178,7 +181,8 @@ public sealed class OrderAdminService(
             timeline,
             notes,
             shipments,
-            [.. OrderStatusMachine.TransitionsFrom(order.Status).Select(AllowedStatusTransition.From)]);
+            [.. OrderStatusMachine.TransitionsFrom(order.Status).Select(AllowedStatusTransition.From)],
+            await emails.ForOrderAsync(id, cancellationToken));
     }
 
     public async Task<AdminOrderDetail> ChangeStatusAsync(Guid id, ChangeOrderStatusRequest request, CancellationToken cancellationToken)
@@ -255,8 +259,9 @@ public sealed class OrderAdminService(
             stockReturned = returnType?.ToString(),
         });
 
-        // Phase 6 inserts the email outbox row of this transition here, in this transaction (P1.7: Accepted, Preparing,
-        // Shipped, Delivered, Cancelled, Rejected send an email; DeliveryFailed does not). Dedup key from history.Id.
+        // The email of this transition, in this transaction (P1.7: Accepted, Preparing, Shipped, Delivered, Cancelled and
+        // Rejected send one, with a freshly issued tracking code; DeliveryFailed does not). Dedup key order:{id}:history:{historyId}.
+        await notifier.StatusChangedAsync(order, history, shipment, cancellationToken);
 
         // The concurrency check (version = xmin) happens here; a stale version gives 409 CONCURRENT_EDIT and nothing is kept.
         db.Entry(order).Property(o => o.Version).OriginalValue = request.Version.Value;

@@ -49,6 +49,10 @@ public static class ErrorCodes
 
     // Shipping
     public const string CourierNameTaken = "COURIER_NAME_TAKEN";
+
+    // Tracking and emails
+    public const string TrackingNotFound = "TRACKING_NOT_FOUND";
+    public const string EmailNotRetryable = "EMAIL_NOT_RETRYABLE";
 }
 
 /// <summary>Default Serbian (Latin) texts for the generic error codes.</summary>
@@ -163,4 +167,10 @@ public static class ErrorTexts
 
     public const string CourierNameTakenTitle = "Naziv je zauzet";
     public const string CourierNameTakenDetail = "Kurirska služba sa ovim nazivom već postoji.";
+
+    public const string TrackingNotFoundTitle = "Porudžbina nije pronađena";
+    public const string TrackingNotFoundDetail = "Porudžbina sa ovim kodom za praćenje nije pronađena. Proverite kod iz poruke e-pošte i pokušajte ponovo.";
+
+    public const string EmailNotRetryableTitle = "Poruka se ne može ponovo poslati";
+    public const string EmailNotRetryableDetail = "Ponovo se šalju samo poruke čije je slanje konačno neuspelo.";
 }

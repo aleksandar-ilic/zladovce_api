@@ -355,6 +355,24 @@ public class StartupGuardTests(PostgresFixture postgres)
     }
 
     [Fact]
+    public void Deployed_api_refuses_to_start_without_the_storefront_url_and_the_tracking_key()
+    {
+        using var factory = new CustomApiFactory("Production", new Dictionary<string, string?>
+        {
+            ["Auth:Cognito:Region"] = CognitoApiFactory.Region,
+            ["Auth:Cognito:UserPoolId"] = CognitoApiFactory.UserPoolId,
+            ["Auth:Cognito:ClientId"] = CognitoApiFactory.ClientId,
+            ["Tracking:TokenEncryptionKey"] = Zladovce.Application.Notifications.TrackingOptions.DevelopmentKey,
+        })
+        { ConnectionString = postgres.ConnectionString };
+
+        var exception = Assert.Throws<InvalidOperationException>(() => factory.CreateClient());
+
+        Assert.Contains("Storefront:BaseUrl", exception.Message);
+        Assert.Contains("development key", exception.Message);
+    }
+
+    [Fact]
     public void Application_refuses_a_wildcard_cors_origin()
     {
         using var factory = new CustomApiFactory("Development", new Dictionary<string, string?>

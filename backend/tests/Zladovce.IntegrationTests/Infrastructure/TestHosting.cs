@@ -120,7 +120,7 @@ public sealed class PostgresFixture : IAsyncLifetime
 }
 
 [CollectionDefinition(Name)]
-public sealed class PostgresCollection : ICollectionFixture<PostgresFixture>, ICollectionFixture<MinioFixture>
+public sealed class PostgresCollection : ICollectionFixture<PostgresFixture>, ICollectionFixture<MinioFixture>, ICollectionFixture<MailpitFixture>
 {
     public const string Name = "postgres";
 }
@@ -181,6 +181,9 @@ public abstract class ApiFactory(string environment) : WebApplicationFactory<Pro
     /// <summary>Additional settings, applied after those of the subclass (for example media storage).</summary>
     public Dictionary<string, string?> ExtraSettings { get; init; } = [];
 
+    /// <summary>Service replacements of one test (applied last).</summary>
+    public Action<IServiceCollection>? TestServices { get; init; }
+
     protected virtual IReadOnlyDictionary<string, string?> Settings => new Dictionary<string, string?>();
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
@@ -198,6 +201,7 @@ public abstract class ApiFactory(string environment) : WebApplicationFactory<Pro
             services.AddScoped<IValidator<ProbeRequest>, ProbeRequestValidator>();
             services.AddTransient<IStartupFilter, ProbeEndpointStartupFilter>();
             ConfigureTestServices(services);
+            TestServices?.Invoke(services);
         });
     }
 
@@ -217,7 +221,17 @@ public sealed class DevApiFactory() : ApiFactory("Development")
 
         // Tests are not throttled unless they are about rate limiting (they switch it back on through ExtraSettings).
         ["RateLimiting:Enabled"] = "false",
+
+        // Emails are sent by the tests' own dispatcher runs, never by a background service of a test host.
+        ["Email:Dispatcher:RunInProcess"] = "false",
     };
+}
+
+/// <summary>Email and tracking settings a deployed environment must have (start-up guard).</summary>
+public static class DeployedSettings
+{
+    /// <summary>A random test key (not the public development key).</summary>
+    public static readonly string TrackingKey = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
 }
 
 /// <summary>Any environment with any settings; used to prove the start-up guards.</summary>
@@ -253,6 +267,8 @@ public sealed class CognitoApiFactory : ApiFactory
         ["Auth:Cognito:UserPoolId"] = UserPoolId,
         ["Auth:Cognito:ClientId"] = ClientId,
         ["Cors:AllowedOrigins:0"] = "https://admin.example.test",
+        ["Storefront:BaseUrl"] = "https://shop.example.test",
+        ["Tracking:TokenEncryptionKey"] = DeployedSettings.TrackingKey,
     };
 
     protected override void ConfigureTestServices(IServiceCollection services)

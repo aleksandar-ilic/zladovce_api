@@ -16,6 +16,8 @@
     <PackageReference Include="AWSSDK.CognitoIdentityProvider" />
     <PackageReference Include="AWSSDK.S3" />
     <PackageReference Include="AWSSDK.SecretsManager" />
+    <PackageReference Include="AWSSDK.SimpleEmailV2" />
+    <PackageReference Include="MailKit" />
     <PackageReference Include="Magick.NET-Q8-AnyCPU" />
   </ItemGroup>
   <ItemGroup>

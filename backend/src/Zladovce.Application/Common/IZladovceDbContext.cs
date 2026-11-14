@@ -7,9 +7,11 @@ using Zladovce.Domain.Categories;
 using Zladovce.Domain.Customers;
 using Zladovce.Domain.Identity;
 using Zladovce.Domain.Inventory;
+using Zladovce.Domain.Notifications;
 using Zladovce.Domain.Orders;
 using Zladovce.Domain.Shipping;
 using Zladovce.Domain.StoreSettings;
+using Zladovce.Domain.Tracking;
 
 namespace Zladovce.Application.Common;
 
@@ -36,6 +38,9 @@ public interface IZladovceDbContext
     DbSet<OrderNote> OrderNotes { get; }
     DbSet<CourierCompany> CourierCompanies { get; }
     DbSet<Shipment> Shipments { get; }
+    DbSet<OrderTrackingToken> OrderTrackingTokens { get; }
+    DbSet<EmailOutboxMessage> EmailOutbox { get; }
+    DbSet<EmailLog> EmailLogs { get; }
 
     /// <summary>Transactions. Modules share one context so that a business operation is one transaction.</summary>
     DatabaseFacade Database { get; }

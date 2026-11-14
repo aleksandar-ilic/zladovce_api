@@ -86,6 +86,9 @@ public class CatalogSecurityTests(PostgresFixture postgres)
             ["Cors:AllowedOrigins:0"] = "https://admin.dev.example",
             ["Media:BucketName"] = "zladovce-media-dev",
             ["Media:BaseUrl"] = "https://media.dev.example",
+            ["Storefront:BaseUrl"] = "https://shop.dev.example",
+            ["Tracking:TokenEncryptionKey"] = DeployedSettings.TrackingKey,
+            ["Email:FromAddress"] = "prodavnica@shop.dev.example",
         })
         { ConnectionString = postgres.ConnectionString };
         using var client = factory.CreateClient();
@@ -157,7 +160,7 @@ public class RoleBootstrapTests(PostgresFixture postgres)
 
         var migrate = await new MigrationRunner(Configuration(new() { ["Database:ConnectionString"] = asMigrator }))
             .HandleAsync(new MigrationRequest(), new FakeLambdaContext());
-        Assert.Equal(3, migrate.AppliedMigrations.Count);
+        Assert.Equal(4, migrate.AppliedMigrations.Count);
 
         await using (var connection = new NpgsqlConnection(databaseUrl))
         {

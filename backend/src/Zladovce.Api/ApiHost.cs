@@ -11,14 +11,17 @@ using Zladovce.Api.Auth;
 using Zladovce.Api.Endpoints;
 using Zladovce.Api.Errors;
 using Zladovce.Api.Logging;
+using Zladovce.Api.Notifications;
 using Zladovce.Api.OpenApi;
 using Zladovce.Api.RateLimiting;
 using Zladovce.Api.Validation;
 using Zladovce.Application;
 using Zladovce.Application.Common;
+using Zladovce.Application.Notifications;
 using Zladovce.Infrastructure;
 using Zladovce.Infrastructure.Database;
 using Zladovce.Infrastructure.Identity;
+using Zladovce.Infrastructure.Notifications;
 using Zladovce.Infrastructure.Persistence;
 
 namespace Zladovce.Api;
@@ -41,6 +44,9 @@ public static class ApiHost
         // Fail fast, before anything listens.
         StartupGuards.EnsureAuthConfiguration(environment, auth, cognito, runningInLambda);
         StartupGuards.EnsureCorsOrigins(corsOrigins);
+        var email = configuration.GetSection(EmailOptions.SectionName).Get<EmailOptions>() ?? new EmailOptions();
+        var dispatchInProcess = email.Dispatcher.RunInProcess && !runningInLambda;
+        NotificationServices.EnsureConfiguration(configuration, environment.IsDevelopment(), sendsEmail: dispatchInProcess);
 
         builder.Host.UseSerilog((context, _, logger) => logger
             .MinimumLevel.Information()
@@ -59,6 +65,11 @@ public static class ApiHost
 
         builder.Services.AddApplication();
         builder.Services.AddInfrastructure(configuration);
+        if (dispatchInProcess)
+        {
+            // Local development: emails flow without the outbox worker Lambda.
+            builder.Services.AddHostedService<OutboxDispatcherService>();
+        }
 
         builder.Services.AddHttpContextAccessor();
         builder.Services.AddScoped<IRequestContext, HttpRequestContext>();

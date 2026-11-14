@@ -6,9 +6,11 @@ using Zladovce.Domain.Categories;
 using Zladovce.Domain.Customers;
 using Zladovce.Domain.Identity;
 using Zladovce.Domain.Inventory;
+using Zladovce.Domain.Notifications;
 using Zladovce.Domain.Orders;
 using Zladovce.Domain.Shipping;
 using Zladovce.Domain.StoreSettings;
+using Zladovce.Domain.Tracking;
 using Zladovce.Infrastructure.RateLimiting;
 
 namespace Zladovce.Infrastructure.Persistence;
@@ -39,6 +41,9 @@ public sealed class ZladovceDbContext(DbContextOptions<ZladovceDbContext> option
     public DbSet<OrderNumberCounter> OrderNumberCounters => Set<OrderNumberCounter>();
     public DbSet<CourierCompany> CourierCompanies => Set<CourierCompany>();
     public DbSet<Shipment> Shipments => Set<Shipment>();
+    public DbSet<OrderTrackingToken> OrderTrackingTokens => Set<OrderTrackingToken>();
+    public DbSet<EmailOutboxMessage> EmailOutbox => Set<EmailOutboxMessage>();
+    public DbSet<EmailLog> EmailLogs => Set<EmailLog>();
     public DbSet<RateLimitBucket> RateLimitBuckets => Set<RateLimitBucket>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)

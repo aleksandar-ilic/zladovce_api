@@ -14,18 +14,19 @@ public class MigrationTests(PostgresFixture postgres)
         var first = await PostgresFixture.RunMigrationsAsync(connectionString);
         var second = await PostgresFixture.RunMigrationsAsync(connectionString);
 
-        Assert.Equal(3, first.AppliedMigrations.Count);
+        Assert.Equal(4, first.AppliedMigrations.Count);
         Assert.EndsWith("_InitialFoundation", first.AppliedMigrations[0]);
         Assert.EndsWith("_CatalogAndInventory", first.AppliedMigrations[1]);
         Assert.EndsWith("_CheckoutAndOrders", first.AppliedMigrations[2]);
-        Assert.Equal(first.AppliedMigrations[2], first.CurrentMigration);
+        Assert.EndsWith("_TrackingAndNotifications", first.AppliedMigrations[3]);
+        Assert.Equal(first.AppliedMigrations[3], first.CurrentMigration);
 
         Assert.Empty(second.AppliedMigrations);
         Assert.Equal(first.CurrentMigration, second.CurrentMigration);
     }
 
     [Fact]
-    public async Task Schema_has_exactly_the_foundation_catalog_and_order_tables()
+    public async Task Schema_has_exactly_the_foundation_catalog_order_and_notification_tables()
     {
         var tables = await postgres.ScalarAsync<string[]>(
             """
@@ -36,8 +37,9 @@ public class MigrationTests(PostgresFixture postgres)
 
         Assert.Equal(
             [
-                "addresses", "admin_users", "audit_logs", "categories", "courier_companies", "customers", "inventory", "inventory_movements",
-                "order_items", "order_notes", "order_number_counters", "order_status_history", "orders", "product_images", "product_variants",
+                "addresses", "admin_users", "audit_logs", "categories", "courier_companies", "customers", "email_logs", "email_outbox",
+                "inventory", "inventory_movements", "order_items", "order_notes", "order_number_counters", "order_status_history",
+                "order_tracking_tokens", "orders", "product_images", "product_variants",
                 "products", "rate_limit_buckets", "shipments", "store_settings",
             ],
             tables!);

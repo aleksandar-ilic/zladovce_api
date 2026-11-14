@@ -7,9 +7,11 @@ using Zladovce.Application.Cart;
 using Zladovce.Application.Common;
 using Zladovce.Application.Common.Errors;
 using Zladovce.Application.Inventory;
+using Zladovce.Application.Notifications;
 using Zladovce.Domain.Common;
 using Zladovce.Domain.Customers;
 using Zladovce.Domain.Orders;
+using Zladovce.Domain.Tracking;
 
 namespace Zladovce.Application.Orders;
 
@@ -101,11 +103,18 @@ public interface ICheckoutStore
     Task<int> NextOrderSequenceAsync(int year, CancellationToken cancellationToken);
 }
 
+/// <summary>Row lock on an order for the rest of the current transaction (<c>SELECT … FOR UPDATE</c>; does not change its version).</summary>
+public interface IOrderLocks
+{
+    Task LockAsync(Guid orderId, CancellationToken cancellationToken);
+}
+
 public sealed class CheckoutService(
     IZladovceDbContext db,
     ICartPricingService pricing,
     IInventoryService inventory,
     ICheckoutStore store,
+    IOrderNotifier notifier,
     TimeProvider timeProvider) : ICheckoutService
 {
     private static readonly CultureInfo Serbian = CultureInfo.GetCultureInfo("sr-Latn-RS");
@@ -182,8 +191,9 @@ public sealed class CheckoutService(
         db.Orders.Add(order);
         db.OrderStatusHistory.Add(history);
 
-        // Phase 6 inserts here, in this transaction: the tracking token hash (order_tracking_tokens) and the
-        // "Porudžbina primljena" email_outbox row (P1.7), whose dedup key is derived from this history entry.
+        // Same transaction: the tracking token hash (order_tracking_tokens) and the "Porudžbina primljena" outbox row (P1.7,
+        // dedup key order:{id}:received) with the code encrypted. A rollback below drops both together with the order.
+        var trackingCode = await notifier.OrderPlacedAsync(order, address, cancellationToken);
 
         try
         {
@@ -206,7 +216,7 @@ public sealed class CheckoutService(
         }
 
         await transaction.CommitAsync(cancellationToken);
-        return new CheckoutResult(PlacedOrderResponse.From(order), Created: true);
+        return new CheckoutResult(PlacedOrderResponse.From(order) with { TrackingCode = TrackingCode.Format(trackingCode) }, Created: true);
     }
 
     private Task<Order?> FindByKeyAsync(Guid idempotencyKey, CancellationToken cancellationToken) =>

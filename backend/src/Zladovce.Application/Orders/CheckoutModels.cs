@@ -197,8 +197,8 @@ public sealed record PlacedOrderItem(Guid VariantId, string ProductName, string 
 /// </summary>
 /// <param name="Items">Item snapshots, sorted by product name, variant name and SKU.</param>
 /// <param name="TrackingCode">
-/// The internal tracking code, shown once. Always null until tracking codes exist (Phase 6); on a replay it stays null even then,
-/// because the plain code is never stored.
+/// The internal tracking code (<c>XXXXX-XXXXX-XXXXX-XXXXX-XXXXXX</c>), shown once in the 201 response and sent in the
+/// confirmation email. Null on a replay (200), because the plain code is never stored.
 /// </param>
 public sealed record PlacedOrderResponse(
     string OrderNumber,

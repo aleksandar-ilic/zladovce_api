@@ -113,6 +113,7 @@ public sealed record AllowedStatusTransition(OrderStatus Status, bool RequiresSh
 /// <param name="Notes">Internal notes, oldest first.</param>
 /// <param name="Shipments">Shipping attempts, oldest first.</param>
 /// <param name="AllowedNextStatuses">Empty for a final status.</param>
+/// <param name="Emails">The order's emails (state only, no bodies), oldest first.</param>
 public sealed record AdminOrderDetail(
     Guid Id,
     string OrderNumber,
@@ -133,7 +134,8 @@ public sealed record AdminOrderDetail(
     IReadOnlyList<AdminOrderTimelineEntry> Timeline,
     IReadOnlyList<AdminOrderNote> Notes,
     IReadOnlyList<AdminOrderShipment> Shipments,
-    IReadOnlyList<AllowedStatusTransition> AllowedNextStatuses);
+    IReadOnlyList<AllowedStatusTransition> AllowedNextStatuses,
+    IReadOnlyList<Notifications.AdminEmailItem> Emails);
 
 /// <summary>Shipment entered when an order moves to Shipped.</summary>
 public sealed record NewShipmentRequest
@@ -162,7 +164,7 @@ public sealed record ChangeOrderStatusRequest
     /// <summary>Never shown to the customer. Up to 2000 characters.</summary>
     public string? InternalNote { get; init; }
 
-    /// <summary>Shown on the tracking page and in the email (Phase 6). Up to 2000 characters.</summary>
+    /// <summary>Shown on the tracking page and in the status email. Up to 2000 characters.</summary>
     public string? CustomerMessage { get; init; }
 
     /// <summary>Required when <c>newStatus</c> is Shipped, must be absent or null otherwise.</summary>

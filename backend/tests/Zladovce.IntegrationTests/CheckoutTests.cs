@@ -60,7 +60,7 @@ public class CheckoutTests : IAsyncLifetime
         Assert.Equal(2120m, placed.GetProperty("total").GetDecimal());
         Assert.Equal("RSD", placed.GetProperty("currency").GetString());
         Assert.Equal("CashOnDelivery", placed.GetProperty("paymentMethod").GetString());
-        Assert.Equal(JsonValueKind.Null, placed.GetProperty("trackingCode").ValueKind);
+        Assert.Matches("^[0-9A-HJKMNP-TV-Z]{5}(-[0-9A-HJKMNP-TV-Z]{5}){3}-[0-9A-HJKMNP-TV-Z]{6}$", placed.GetProperty("trackingCode").GetString());
         var item = Assert.Single(placed.GetProperty("items").EnumerateArray());
         Assert.Equal("Džem od šljiva", item.GetProperty("productName").GetString());
         Assert.Equal("370 g", item.GetProperty("variantName").GetString());

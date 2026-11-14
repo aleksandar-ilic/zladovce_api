@@ -39,8 +39,8 @@ public static class CheckoutEndpoints
                 "with every retry of that submission. Only a successful order uses up the key; after a 409/400 the same key may be " +
                 "sent again with the corrected cart. A request with a used key and the same content returns the original order " +
                 "(200, `trackingCode` null); with different content 409 IDEMPOTENCY_KEY_REUSED. Prices, shipping and totals are " +
-                "computed from the database with the rules of the cart quote; stock is deducted at once. `trackingCode` is always " +
-                "null until tracking codes are introduced (Phase 6). " +
+                "computed from the database with the rules of the cart quote; stock is deducted at once. `trackingCode` (201 only) is " +
+                "the internal tracking code `XXXXX-XXXXX-XXXXX-XXXXX-XXXXXX`, shown once; it is also sent in the confirmation email. " +
                 "Errors: 400 VALIDATION_FAILED (field paths such as `customer.phone`, `address.postalCode`, `items[0].quantity`, " +
                 "`acceptedTerms`, `idempotencyKey`), BAD_REQUEST (malformed JSON); 409 with the fresh quote in `quote`: CART_CHANGED " +
                 "(a line unavailable or reduced, `knownUnitPrice` or `expectedTotal` differs; `errors` names the lines), " +
@@ -80,7 +80,7 @@ public static class AdminOrderEndpoints
         orders.MapGet("/{id:guid}", async (Guid id, IOrderAdminService service, CancellationToken ct) =>
                 TypedResults.Ok(await service.GetAsync(id, ct)))
             .WithName("GetAdminOrder")
-            .WithSummary("Order detail: contact, address, items, totals, payment, timeline, notes, shipments and the allowed next statuses.")
+            .WithSummary("Order detail: contact, address, items, totals, payment, timeline, notes, shipments, emails and the allowed next statuses.")
             .WithDescription("Errors: 404 NOT_FOUND.")
             .Problems(StatusCodes.Status404NotFound);
 
@@ -93,7 +93,8 @@ public static class AdminOrderEndpoints
                 "Shipped → Delivered | DeliveryFailed; DeliveryFailed → Shipped | Cancelled; Delivered, Cancelled, Rejected are final. " +
                 "Shipped requires `shipment` (active courier; tracking number, date (default now), note optional). Stock returns " +
                 "automatically on Rejected and on Cancelled before shipping; cancelling after DeliveryFailed requires `restock` " +
-                "(true = goods back on stock). History, shipment, stock movements and audit are one transaction. " +
+                "(true = goods back on stock). History, shipment, stock movements, audit and the customer email (P1.7: every target " +
+                "except DeliveryFailed; Rejected uses the cancellation email; `customerMessage` is included) are one transaction. " +
                 "Errors: 400 VALIDATION_FAILED (`shipment`, `shipment.courierCompanyId`, `shipment.shippedAt`, `restock`); 404 NOT_FOUND; " +
                 "409 INVALID_STATUS_TRANSITION (with `allowedNextStatuses`), CONCURRENT_EDIT (stale `version`).")
             .Problems(StatusCodes.Status400BadRequest, StatusCodes.Status404NotFound, StatusCodes.Status409Conflict);

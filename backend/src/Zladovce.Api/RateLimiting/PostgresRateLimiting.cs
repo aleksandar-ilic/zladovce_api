@@ -46,7 +46,8 @@ public static class ClientIpResolver
 }
 
 /// <summary>Endpoint metadata: the endpoint is limited by the named policy (<see cref="RateLimitPolicies"/>).</summary>
-public sealed record PostgresRateLimitMetadata(string PolicyName);
+/// <param name="PerClient">True: one counter per client IP. False: one counter for all clients of the endpoint (a global cap).</param>
+public sealed record PostgresRateLimitMetadata(string PolicyName, bool PerClient = true);
 
 public static class PostgresRateLimitingExtensions
 {
@@ -58,6 +59,14 @@ public static class PostgresRateLimitingExtensions
     public static TBuilder RequirePostgresRateLimit<TBuilder>(this TBuilder builder, string policyName)
         where TBuilder : IEndpointConventionBuilder =>
         builder.WithMetadata(new PostgresRateLimitMetadata(policyName));
+
+    /// <summary>
+    /// A cap for all clients of the endpoint together (one shared counter). Can be combined with
+    /// <see cref="RequirePostgresRateLimit{TBuilder}"/>; every limit is checked, the per-client ones first.
+    /// </summary>
+    public static TBuilder RequireGlobalPostgresRateLimit<TBuilder>(this TBuilder builder, string policyName)
+        where TBuilder : IEndpointConventionBuilder =>
+        builder.WithMetadata(new PostgresRateLimitMetadata(policyName, PerClient: false));
 }
 
 /// <summary>Applies <see cref="PostgresRateLimitMetadata"/> before the endpoint (and before request validation) runs.</summary>
@@ -66,21 +75,27 @@ public sealed class PostgresRateLimitingMiddleware(RequestDelegate next)
     /// <summary>Key used when no client address can be determined; all such requests share one bucket.</summary>
     public const string UnknownClient = "unknown";
 
+    /// <summary>Key of the shared counter of a global cap.</summary>
+    public const string AllClients = "*";
+
     public async Task InvokeAsync(HttpContext context, IOptionsSnapshot<RateLimitingOptions> options, IOptions<ClientIpOptions> clientIp, IRateLimiter limiter)
     {
-        var metadata = context.GetEndpoint()?.Metadata.GetMetadata<PostgresRateLimitMetadata>();
-        if (metadata is null || !options.Value.Enabled || HttpMethods.IsOptions(context.Request.Method))
+        var limits = context.GetEndpoint()?.Metadata.GetOrderedMetadata<PostgresRateLimitMetadata>() ?? [];
+        if (limits.Count == 0 || !options.Value.Enabled || HttpMethods.IsOptions(context.Request.Method))
         {
             await next(context);
             return;
         }
 
-        var policy = options.Value.Resolve(metadata.PolicyName);
         var client = ClientIpResolver.Resolve(context, clientIp.Value)?.ToString() ?? UnknownClient;
-        var decision = await limiter.AcquireAsync(policy, client, context.RequestAborted);
-        if (!decision.Allowed)
+        foreach (var limit in limits.OrderByDescending(l => l.PerClient))
         {
-            throw new RateLimitedException(decision.RetryAfter);
+            var policy = options.Value.Resolve(limit.PolicyName);
+            var decision = await limiter.AcquireAsync(policy, limit.PerClient ? client : AllClients, context.RequestAborted);
+            if (!decision.Allowed)
+            {
+                throw new RateLimitedException(decision.RetryAfter);
+            }
         }
 
         await next(context);

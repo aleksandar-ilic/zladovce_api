@@ -47,9 +47,20 @@ public static class RateLimitPolicies
     /// <summary><c>POST /api/v1/orders</c>: 5 per 10 minutes per IP.</summary>
     public const string CreateOrder = "CreateOrder";
 
+    /// <summary><c>POST /api/v1/tracking/lookup</c>: 10 per 10 minutes per IP.</summary>
+    public const string TrackingLookup = "TrackingLookup";
+
+    /// <summary>
+    /// <c>POST /api/v1/tracking/lookup</c>, all clients together: 300 per minute. A coarse safety cap against guessing spread
+    /// over many addresses (API Gateway route throttling is the outer limit).
+    /// </summary>
+    public const string TrackingLookupGlobal = "TrackingLookupGlobal";
+
     public static readonly IReadOnlyDictionary<string, RateLimitPolicy> Defaults = new Dictionary<string, RateLimitPolicy>(StringComparer.Ordinal)
     {
         [CreateOrder] = new(CreateOrder, 5, TimeSpan.FromMinutes(10)),
+        [TrackingLookup] = new(TrackingLookup, 10, TimeSpan.FromMinutes(10)),
+        [TrackingLookupGlobal] = new(TrackingLookupGlobal, 300, TimeSpan.FromMinutes(1)),
     };
 }
 
@@ -66,7 +77,7 @@ public interface IRateLimiter
 {
     Task<RateLimitDecision> AcquireAsync(RateLimitPolicy policy, string clientKey, CancellationToken cancellationToken);
 
-    /// <summary>Deletes buckets whose window started before <paramref name="before"/>. For the periodic worker (Phase 6).</summary>
+    /// <summary>Deletes buckets whose window started before <paramref name="before"/>. Called by the outbox worker on every run.</summary>
     Task<int> PurgeExpiredAsync(DateTimeOffset before, CancellationToken cancellationToken);
 }
 

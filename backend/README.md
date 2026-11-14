@@ -21,6 +21,12 @@ the order status state machine with stock returns, order administration (list, d
 payment, per-status summary), couriers, store settings administration, bestsellers, `limitReason` in the cart quote and a
 PostgreSQL-backed rate limiter.
 
+Phase 6 (Tracking and notifications, backend part) adds migration `TrackingAndNotifications` (`order_tracking_tokens`,
+`email_outbox`, `email_logs`), tracking codes issued by checkout and by every status email, the public tracking lookup, the
+transactional email outbox with its dispatcher (outbox worker Lambda, or a background service locally), SES and SMTP
+senders, the six Serbian order emails, admin email visibility / retry / resend confirmation / revoke tracking codes, and
+Mailpit for local development. See "Tracking and emails (Phase 6)".
+
 ## Layout
 
 ```
@@ -28,7 +34,7 @@ backend/
 ├── Zladovce.sln
 ├── Directory.Build.props        net10.0, nullable, warnings as errors
 ├── Directory.Packages.props     central package versions
-├── docker-compose.yml           local PostgreSQL 17 (host port 5433) and MinIO (9000/9001)
+├── docker-compose.yml           local PostgreSQL 17 (host port 5433), MinIO (9000/9001) and Mailpit (1025/8025)
 ├── dotnet-tools.json            local tool: dotnet-ef
 ├── openapi/zladovce-v1.json     committed OpenAPI document (source for frontend models)
 ├── scripts/generate-openapi.ps1
@@ -37,26 +43,27 @@ backend/
 │   ├── Zladovce.Application/     services, DTOs, validators, ports
 │   ├── Zladovce.Infrastructure/  EF Core, migrations, database connection, Cognito profile lookup
 │   ├── Zladovce.Api/             endpoints, auth, error handling, logging, OpenAPI, Lambda HTTP entry
-│   └── Zladovce.Lambda/          non-HTTP handlers (MigrationRunner, ImageProcessorFunction)
+│   └── Zladovce.Lambda/          non-HTTP handlers (MigrationRunner, ImageProcessorFunction, OutboxWorkerFunction)
 └── tests/
     ├── Zladovce.UnitTests/
     └── Zladovce.IntegrationTests/  real PostgreSQL through Testcontainers
 ```
 
 Dependency rule: `Domain` ← `Application` ← `Infrastructure` ← `Api` / `Lambda`. Each project is organised by
-module folder (`Identity`, `StoreSettings`, `Audit`, `Categories`, `Catalog`, `Inventory`, `Media`, `Cart`, `Seo`, `Orders`, `Shipping`, `Customers`, `Common`).
+module folder (`Identity`, `StoreSettings`, `Audit`, `Categories`, `Catalog`, `Inventory`, `Media`, `Cart`, `Seo`, `Orders`, `Shipping`, `Customers`, `Tracking`, `Notifications`, `Common`).
 
 ## Prerequisites
 
 - .NET SDK that can build `net10.0` (.NET 10 SDK or newer) and the .NET 10 runtime
 - Docker (local database and integration tests)
 
-## Start PostgreSQL and MinIO
+## Start PostgreSQL, MinIO and Mailpit
 
 ```powershell
 cd backend
 docker compose up -d        # PostgreSQL 17 on localhost:5433, db/user "zladovce", password "zladovce_dev"
                             # MinIO (S3-compatible) API http://localhost:9000, console http://localhost:9001
+                            # Mailpit SMTP localhost:1025, web UI with every sent email http://localhost:8025
 docker compose down         # stop (add -v to delete the data volumes)
 ```
 
@@ -67,6 +74,10 @@ MinIO stands in for the AWS media bucket. The compose file starts the server (us
 CloudFront on AWS); `uploads/*` stays private. Browser uploads are allowed from `http://localhost:4201` (the admin
 application) through `MINIO_API_CORS_ALLOW_ORIGIN` (MinIO has no per-bucket CORS). The images are Chainguard builds
 of the open-source MinIO server and client, because MinIO no longer publishes its own container images.
+
+Mailpit (`axllent/mailpit:v1.32.0`, MIT) catches every email the API sends in Development; nothing reaches real recipients.
+Open http://localhost:8025 to read them (HTML, text part, headers). Messages are kept in the `mailpitdata` volume. While the API
+runs in Development, its background dispatcher sends queued emails every 5 seconds.
 
 ## Run the API
 
@@ -306,8 +317,8 @@ counter row, `INSERT … ON CONFLICT DO UPDATE … RETURNING`, locked until comm
 item snapshots, history `Received` (no admin) → `IInventoryService.DeductAsync` (conditional updates in variant-id order,
 movements `OrderPlaced` with `order_id`) → commit. Response `201 { orderNumber, placedAt, items[{ variantId, productName,
 variantName, sku, unitPrice, quantity, lineTotal }], subtotal, shippingPrice, total, currency, paymentMethod: "CashOnDelivery",
-trackingCode: null }`. **`trackingCode` is always null in Phase 5**; Phase 6 issues the code (and the outbox email) inside
-the same transaction – the call site is marked in `CheckoutService`.
+trackingCode }`. `trackingCode` (Phase 6) is issued in the same transaction as the order, together with the confirmation outbox
+row; it is returned only in the 201 response (`null` on a replay, because the plain code is never stored).
 
 Idempotency rules:
 
@@ -330,7 +341,7 @@ Lambda instances share it). Every request counts, including invalid ones. Exceed
 `Retry-After` (seconds; exposed through CORS). Reusable: `.RequirePostgresRateLimit(policyName)` on any endpoint plus a
 policy in `RateLimitPolicies`. Client IP: the `X-Forwarded-For` entry `ClientIp:TrustedProxyHops` positions from the right
 (default 1 = the address API Gateway appended; entries further left are client-supplied), else the connection address.
-`IRateLimiter.PurgeExpiredAsync` deletes old buckets – to be called by the Phase 6 worker. `RateLimiting:Enabled=false`
+`IRateLimiter.PurgeExpiredAsync` deletes old buckets; the outbox worker calls it on every run (windows older than one day). `RateLimiting:Enabled=false`
 switches limits off (integration tests).
 
 ### Status state machine (P1.5) and stock (P1.6)
@@ -349,7 +360,7 @@ requiresShipment, stockReturn: None|Automatic|AdminChoice, requiresRestockChoice
 version check (`xmin`; stale → `409 CONCURRENT_EDIT`), history row (previous, new, admin, internal note, customer message),
 shipment, stock return, `Order.StatusChanged` audit. Invalid → `409 INVALID_STATUS_TRANSITION` with `allowedNextStatuses`.
 `shipment` outside Shipped or `restock` outside DeliveryFailed → Cancelled → `400` (`errors.shipment` / `errors.restock`).
-Phase 6 inserts the outbox email row at the marked call site in `OrderAdminService.ChangeStatusAsync`.
+The same transaction queues the status email (Phase 6, see "Tracking and emails").
 
 Notes are a separate append-only table `order_notes` (not history rows with `previous = new`): the history stays exactly one
 row per transition, so the tracking timeline and the "delivered in period" metric need no filter. Shipment edits and
@@ -374,6 +385,100 @@ applies) on `quantityReduced`, null otherwise.
 New error codes: `IDEMPOTENCY_KEY_REUSED`, `CART_CHANGED`, `MINIMUM_ORDER_NOT_MET`, `SHIPPING_DISABLED`,
 `INVALID_STATUS_TRANSITION`, `ORDER_NOT_DELIVERED`, `COURIER_NAME_TAKEN` (`errors.name`); `INSUFFICIENT_STOCK` and
 `RATE_LIMITED` are now returned by checkout.
+
+## Tracking and emails (Phase 6)
+
+### Tracking codes
+
+- 130 bits from `RandomNumberGenerator`, 26 Crockford Base32 characters (`0-9 A-Z` without `I L O U`), displayed as
+  `XXXXX-XXXXX-XXXXX-XXXXX-XXXXXX` (`TrackingCode` in the domain).
+- Input normalisation: hyphens and whitespace are removed, case is ignored, `O → 0`, `I`/`L → 1`; anything that is then not
+  exactly 26 alphabet characters (or is longer than 64 characters raw) is malformed.
+- Only `SHA-256(canonical code)` is stored (`order_tracking_tokens.token_hash`, unique). Malformed input is still hashed (with a
+  prefix, so it can never match) and looked up, so it costs the same as an unknown code.
+- Issued: one by checkout (returned once as `trackingCode` in the 201 response and sent in the confirmation), a fresh one per
+  status email (links work without storing plain codes), one per "resend confirmation" and, when needed, one by an admin retry.
+  All codes of an order stay valid until an administrator revokes them (`POST …/tracking/revoke` revokes every code issued so
+  far; codes issued later work).
+- Email links: `{Storefront:BaseUrl}/track-order#kod={grouped code}` – the code is in the URL fragment, so it never reaches
+  server or CDN logs; the page sends it in the POST body.
+
+### Public lookup
+
+`POST /api/v1/tracking/lookup` `{ "code": "…" }` (member required, `null` allowed) →
+`{ orderNumber, status, statusLabel, placedAt, timeline: [{ status, label, at, customerMessage }], shipment: { courierName,
+trackingNumber, trackingUrl, shippedAt } | null }`. `timeline` is the real `order_status_history`, oldest first; `label` is the
+customer wording ("Porudžbina primljena", "Porudžbina prihvaćena", "Proizvodi se pripremaju", "Pošiljka predata kurirskoj
+službi", "Porudžbina isporučena", "Porudžbina otkazana", "Porudžbina nije prihvaćena", "Isporuka nije uspela"); `shipment` is the
+latest shipment. No name, address, phone, email, items, prices, internal notes or admin names. A hit updates `last_used_at`.
+Errors: `404 TRACKING_NOT_FOUND` with one identical body for unknown, revoked and malformed codes; `400 VALIDATION_FAILED` only
+when `code` is missing; `429 RATE_LIMITED` – `TrackingLookup` 10 per 10 minutes per IP and `TrackingLookupGlobal` 300 per minute
+for all clients together (`.RequireGlobalPostgresRateLimit(policy)`; per-client limits are checked first).
+
+### Email outbox
+
+1. Writer (`IEmailOutbox`, `IOrderNotifier`): rows are added to the shared unit of work and committed with the business change –
+   checkout (`OrderReceived`, dedup key `order:{orderId}:received`), status changes (`order:{orderId}:history:{historyId}`) and
+   resend confirmation (`order:{orderId}:resend:{n}`, n = 1, 2, … under a row lock on the order). A failed checkout rolls the row
+   back with the order (integration-tested). `dedup_key` is unique: one row per business event.
+2. Which status sends what (P1.7, `OrderEmailRules`): Accepted → `OrderAccepted`; Preparing → `OrderPreparing`; Shipped →
+   `OrderShipped` (courier, courier tracking number and link when known; again after DeliveryFailed → Shipped); Delivered →
+   `OrderDelivered`; Cancelled → `OrderCancelled`; Rejected → `OrderCancelled` with the rejection wording and the customer
+   message; DeliveryFailed → nothing.
+3. `payload` (jsonb) holds only what the template needs: order number, first name, dates, status, lines/totals/payment method/
+   delivery address (confirmation only), shipment (shipped only), customer message, tracking page URL. The plain code is stored
+   AES-256-GCM encrypted in `encrypted_token` (`version | nonce | tag | ciphertext`, the outbox row id as associated data) and set
+   to `NULL` in the same update that marks the row Sent.
+4. Dispatcher (`EmailDispatcher`): claims one due row at a time –
+   `UPDATE … WHERE id = (SELECT … WHERE status IN ('Pending','Processing') AND next_attempt_at <= now AND (locked_until IS NULL OR
+   locked_until <= now) AND attempt_count < 6 … FOR UPDATE SKIP LOCKED LIMIT 1)` → `Processing`, `attempt_count + 1`, lease
+   `locked_until = now + Email:Dispatcher:LeaseSeconds` (120 s), committed at once. Then it renders, sends (timeout
+   `SendTimeoutSeconds` = 30 s, shorter than the lease) and, in one transaction, writes an `email_logs` row and updates the outbox
+   row guarded by `status = 'Processing' AND attempt_count = <claimed attempt>`. Two workers therefore never hold the same row
+   (integration-tested with concurrent workers). A row whose lease expired during its last allowed attempt becomes Dead. Every
+   run also purges expired `rate_limit_buckets`.
+5. Retry policy (`EmailRetryPolicy`): after failed attempt n the next one is due after 1 min, 5 min, 30 min, 2 h, 12 h; when
+   attempt 6 fails the row is `Dead`. `last_error` / `email_logs.error`: exception type, SMTP status or SES error code, message,
+   with the recipient address replaced by `[primalac]`, at most 1000 characters. An admin retry resets the attempts; the log keeps
+   numbering (attempt 7, 8, …).
+6. Residual risk (documented): if the process dies after the provider accepted an email but before the result is recorded, the
+   lease expires and the email is sent once more (bounded by the attempt limit). The result is recorded even while the host is
+   stopping, which keeps the window to the moment between the provider's answer and the commit.
+7. Triggers: the Lambda `Zladovce.Lambda::Zladovce.Lambda.OutboxWorkerFunction::HandleAsync` (EventBridge schedule every minute;
+   at most `Email:Dispatcher:BatchSize` emails; stops claiming when less than one send timeout of the invocation is left) and,
+   locally, the API's `OutboxDispatcherService` when `Email:Dispatcher:RunInProcess=true` (Development default, every 5 s; never
+   inside Lambda).
+8. `Email:Enabled=false`: rows are still written and stay Pending; nothing is sent (the rate-limit purge still runs).
+
+An email failure never affects an order: checkout and status changes only insert rows; sending happens later (integration-tested
+with a refusing SMTP server).
+
+### Templates
+
+`OrderEmailRenderer` (Application): plain C# string templates, no template library. Every data value is HTML-encoded
+(`WebUtility.HtmlEncode`) where it is written; links are only emitted for absolute http(s) URLs. Table layout with inline CSS,
+max 600 px, cream background, olive accents, Georgia headings, hidden preheader, plain-text alternative; no external images
+except `Email:LogoUrl` (https only), no tracking pixels. Money `1.234,00 RSD`, dates `14.11.2026. u 15:30` in Europe/Belgrade.
+Store contact data (email, phone, address) comes from the store settings and is shown only when set; the footer says why the
+email was sent. Sender `Email:FromAddress` / `Email:FromName` (default: store name); Reply-To `Email:ReplyToAddress`, else the
+store contact email, else none. Senders: `SesEmailSender` (AWSSDK.SimpleEmailV2 `SendEmail`, simple HTML + text content,
+configuration set `Email:Ses:ConfigurationSetName`) and `SmtpEmailSender` (MailKit, MIT).
+
+### Admin endpoints (AdminAny)
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/v1/admin/emails` | `status` (Pending, Processing, Sent, Dead; several), `orderId`, `page`, `pageSize`; newest first |
+| GET | `/api/v1/admin/emails/{id}` | `{ email, attemptLog: [{ attemptNumber, succeeded, providerMessageId, error, createdAt }] }` |
+| POST | `/api/v1/admin/emails/{id}/retry` | Dead → Pending, due now, attempts reset; issues a new code when the stored one is gone. Otherwise `409 EMAIL_NOT_RETRYABLE` |
+| POST | `/api/v1/admin/orders/{id}/emails/resend-confirmation` | Queues a new confirmation with a new code (earlier codes stay valid) |
+| POST | `/api/v1/admin/orders/{id}/tracking/revoke` | `{ revokedCount }`; every code issued so far is revoked |
+
+Email item: `{ id, template, status, orderId, orderNumber, recipient, attempts, lastError, nextAttemptAt, createdAt, sentAt,
+isResent }` – never a body or the payload. The order detail lists the order's emails as `emails` (oldest first). Audit:
+`Email.Retried`, `Order.ConfirmationResent`, `Order.TrackingRevoked`.
+
+New error codes: `TRACKING_NOT_FOUND` (404), `EMAIL_NOT_RETRYABLE` (409).
 
 ## Images
 
@@ -412,6 +517,7 @@ ImageMagick licence, Apache-2.0 style). Free for commercial use; the package shi
 |---|---|---|
 | `Zladovce.Lambda::Zladovce.Lambda.MigrationRunner::HandleAsync` | `{}` or `{ "action": "migrate" }`: apply migrations as `Database__User` (migrator). `{ "action": "bootstrap" }`: create the roles (below) | Pipeline |
 | `Zladovce.Lambda::Zladovce.Lambda.ImageProcessorFunction::HandleAsync` | Process uploads into renditions. No database access | S3 `s3:ObjectCreated:*` on the media bucket, prefix `uploads/` |
+| `Zladovce.Lambda::Zladovce.Lambda.OutboxWorkerFunction::HandleAsync` | Send due outbox emails, purge expired rate-limit windows. Returns `{ claimed, sent, retrying, dead, expired, purgedRateLimitBuckets }` | EventBridge schedule every minute (input ignored) |
 
 ### Database roles (bootstrap)
 
@@ -468,6 +574,8 @@ dotnet test Zladovce.sln
   `WebApplicationFactory`. They never touch the Docker Compose database.
 - The Cognito path is tested with locally signed JWTs shaped like Cognito access tokens; only the signing
   key source is replaced, all validation rules are the real ones. Nothing in the tests calls AWS.
+- Email tests run the real outbox worker handler against a real Mailpit container (`axllent/mailpit:v1.32.0`); failures come
+  from a local TCP server that answers `554`, so the whole MailKit send path runs. A fake clock drives the back-off.
 - Media tests run against a real MinIO container (`cgr.dev/chainguard/minio`, same as compose): they upload with
   the real pre-signed POST and check the real WebP renditions. Storage is never mocked.
 - The role bootstrap is tested on the PostgreSQL container (a `rds_iam` role is created there to mimic RDS; the
@@ -516,6 +624,18 @@ variables (`Section__Key`).
 | `RateLimiting:Enabled` | `false` switches every rate limit off (default `true`) |
 | `RateLimiting:Policies:CreateOrder:PermitLimit`, `WindowSeconds` | Checkout limit per client IP (default 5 per 600 s) |
 | `ClientIp:TrustedProxyHops` | Trusted proxies appending to `X-Forwarded-For` (default 1 = API Gateway; 0 = connection address only) |
+| `RateLimiting:Policies:TrackingLookup`, `TrackingLookupGlobal` | Tracking lookup: 10 per 600 s per IP; 300 per 60 s for all clients together |
+| `Storefront:BaseUrl` | Public shop URL for links in emails (`http://localhost:4200` in Development). Required (https) outside Development |
+| `Tracking:TokenEncryptionKeySecretArn` | Secrets Manager secret with the AES-256 key (secret string = base64 of 32 bytes, or `{ "key": "<base64>" }`). AWS |
+| `Tracking:TokenEncryptionKey` | Base64 of 32 bytes instead of the secret (local, tests). Development has a fixed public key, refused elsewhere |
+| `Email:Enabled` | `false` = outbox rows are written but nothing is sent (default `true`) |
+| `Email:Provider` | `Ses` (default) or `Smtp` (Development: Mailpit) |
+| `Email:FromAddress`, `FromName`, `ReplyToAddress` | Sender (verified SES identity), display name (default: store name), Reply-To (default: store contact email) |
+| `Email:LogoUrl` | Optional https URL of the logo in the email header (the only image) |
+| `Email:Ses:ConfigurationSetName`, `Region` | SES configuration set; SES region (default: the Lambda's region) |
+| `Email:Smtp:Host`, `Port`, `Security` (`None`/`StartTls`/`SslOnConnect`), `UserName`, `Password` | SMTP (Development: `localhost:1025`, `None`) |
+| `Email:Dispatcher:RunInProcess`, `IntervalSeconds` | Background dispatcher in the API (Development: `true`, 5 s). Must be false on Lambda |
+| `Email:Dispatcher:BatchSize`, `LeaseSeconds`, `SendTimeoutSeconds` | Emails per run (50), lease of a claimed row (120 s), send timeout (30 s) |
 
 Nothing the API needs depends on the environment being called `Development`: deployed environments (`Dev`,
 `Staging`, `Production`) only differ in configuration; Swagger, start-up migration and the development
@@ -528,7 +648,11 @@ The application refuses to start when:
 
 - `Auth:DevBypass` is `true` outside the Development environment, or inside AWS Lambda;
 - `Auth:DevBypass` is off and the Cognito settings are incomplete;
-- `Cors:AllowedOrigins` contains anything that is not an exact origin.
+- `Cors:AllowedOrigins` contains anything that is not an exact origin;
+- outside Development: `Storefront:BaseUrl` is not an https URL, no tracking key source is set, the configured key is not 32
+  bytes or is the public development key, or `Email:Dispatcher:RunInProcess` is true inside Lambda;
+- in a host that sends (the outbox worker, or the API with `RunInProcess`): `Email:FromAddress` is missing while
+  `Email:Enabled` is true. The outbox worker Lambda runs the same checks at start.
 
 ## Authentication and authorization
 

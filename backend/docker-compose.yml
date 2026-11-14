@@ -1,4 +1,4 @@
-# Local development services only (PostgreSQL and MinIO). These credentials are for development and must never be reused.
+# Local development services only (PostgreSQL, MinIO and Mailpit). These credentials are for development and must never be reused.
 # The project name is "zladovce-v2" so its volume never collides with volumes of other local projects.
 name: zladovce-v2
 services:
@@ -66,6 +66,24 @@ services:
       MC_HOST_local: http://zladovce:zladovce_dev_minio@minio:9000
     command: ["anonymous", "set", "download", "local/zladovce-media-dev/media/"]
 
+  # Catches every email the API sends in Development (SMTP localhost:1025, no TLS, no authentication).
+  # Web UI with the received emails: http://localhost:8025. Nothing is delivered to real recipients.
+  mailpit:
+    image: axllent/mailpit:v1.32.0
+    container_name: zladovce-v2-mailpit
+    restart: unless-stopped
+    environment:
+      MP_MAX_MESSAGES: 5000
+      MP_DATABASE: /data/mailpit.db
+      MP_SMTP_AUTH_ACCEPT_ANY: 1
+      MP_SMTP_AUTH_ALLOW_INSECURE: 1
+    ports:
+      - "1025:1025"
+      - "8025:8025"
+    volumes:
+      - mailpitdata:/data
+
 volumes:
   pgdata:
   miniodata:
+  mailpitdata:

@@ -107,7 +107,7 @@
           "Checkout"
         ],
         "summary": "Place an order (cash on delivery). 201 new order; 200 replay of the same request with the same Idempotency-Key.",
-        "description": "Header `Idempotency-Key` (UUID) is required: generate it once when the checkout page opens and send the same key with every retry of that submission. Only a successful order uses up the key; after a 409/400 the same key may be sent again with the corrected cart. A request with a used key and the same content returns the original order (200, `trackingCode` null); with different content 409 IDEMPOTENCY_KEY_REUSED. Prices, shipping and totals are computed from the database with the rules of the cart quote; stock is deducted at once. `trackingCode` is always null until tracking codes are introduced (Phase 6). Errors: 400 VALIDATION_FAILED (field paths such as `customer.phone`, `address.postalCode`, `items[0].quantity`, `acceptedTerms`, `idempotencyKey`), BAD_REQUEST (malformed JSON); 409 with the fresh quote in `quote`: CART_CHANGED (a line unavailable or reduced, `knownUnitPrice` or `expectedTotal` differs; `errors` names the lines), INSUFFICIENT_STOCK (stock taken meanwhile; `errors[\"items[i].quantity\"]`), MINIMUM_ORDER_NOT_MET, SHIPPING_DISABLED; 409 IDEMPOTENCY_KEY_REUSED; 429 RATE_LIMITED (5 per 10 minutes per IP, `Retry-After` header in seconds).",
+        "description": "Header `Idempotency-Key` (UUID) is required: generate it once when the checkout page opens and send the same key with every retry of that submission. Only a successful order uses up the key; after a 409/400 the same key may be sent again with the corrected cart. A request with a used key and the same content returns the original order (200, `trackingCode` null); with different content 409 IDEMPOTENCY_KEY_REUSED. Prices, shipping and totals are computed from the database with the rules of the cart quote; stock is deducted at once. `trackingCode` (201 only) is the internal tracking code `XXXXX-XXXXX-XXXXX-XXXXX-XXXXXX`, shown once; it is also sent in the confirmation email. Errors: 400 VALIDATION_FAILED (field paths such as `customer.phone`, `address.postalCode`, `items[0].quantity`, `acceptedTerms`, `idempotencyKey`), BAD_REQUEST (malformed JSON); 409 with the fresh quote in `quote`: CART_CHANGED (a line unavailable or reduced, `knownUnitPrice` or `expectedTotal` differs; `errors` names the lines), INSUFFICIENT_STOCK (stock taken meanwhile; `errors[\"items[i].quantity\"]`), MINIMUM_ORDER_NOT_MET, SHIPPING_DISABLED; 409 IDEMPOTENCY_KEY_REUSED; 429 RATE_LIMITED (5 per 10 minutes per IP, `Retry-After` header in seconds).",
         "operationId": "CreateOrder",
         "parameters": [
           {
@@ -164,6 +164,68 @@
           },
           "409": {
             "description": "Conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiProblem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/tracking/lookup": {
+      "post": {
+        "tags": [
+          "Tracking"
+        ],
+        "summary": "Status, timeline and courier data of the order with this tracking code.",
+        "description": "Body `{ \"code\": \"…\" }`. The code has 26 Crockford Base32 characters, shown as `XXXXX-XXXXX-XXXXX-XXXXX-XXXXXX`; hyphens and spaces are optional, case is ignored, `O` counts as `0` and `I`/`L` as `1`. The page takes it from the email link `/track-order#kod=<code>` (URL fragment) and sends it here in the body — never in a URL. The response has no name, address, phone, email, items or internal notes. Errors: 404 TRACKING_NOT_FOUND — the same body for unknown, revoked and malformed codes; 400 VALIDATION_FAILED only when `code` is missing from the body; 429 RATE_LIMITED (10 per 10 minutes per IP, plus a global cap; `Retry-After` in seconds).",
+        "operationId": "LookupTracking",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TrackingLookupRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrackingLookupResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiProblem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -2899,7 +2961,7 @@
         "tags": [
           "Admin – orders"
         ],
-        "summary": "Order detail: contact, address, items, totals, payment, timeline, notes, shipments and the allowed next statuses.",
+        "summary": "Order detail: contact, address, items, totals, payment, timeline, notes, shipments, emails and the allowed next statuses.",
         "description": "Errors: 404 NOT_FOUND.",
         "operationId": "GetAdminOrder",
         "parameters": [
@@ -2968,7 +3030,7 @@
           "Admin – orders"
         ],
         "summary": "Move the order to the next status (P1.5). Returns the updated order.",
-        "description": "Allowed: Received → Accepted | Rejected | Cancelled; Accepted → Preparing | Cancelled; Preparing → Shipped | Cancelled; Shipped → Delivered | DeliveryFailed; DeliveryFailed → Shipped | Cancelled; Delivered, Cancelled, Rejected are final. Shipped requires `shipment` (active courier; tracking number, date (default now), note optional). Stock returns automatically on Rejected and on Cancelled before shipping; cancelling after DeliveryFailed requires `restock` (true = goods back on stock). History, shipment, stock movements and audit are one transaction. Errors: 400 VALIDATION_FAILED (`shipment`, `shipment.courierCompanyId`, `shipment.shippedAt`, `restock`); 404 NOT_FOUND; 409 INVALID_STATUS_TRANSITION (with `allowedNextStatuses`), CONCURRENT_EDIT (stale `version`).",
+        "description": "Allowed: Received → Accepted | Rejected | Cancelled; Accepted → Preparing | Cancelled; Preparing → Shipped | Cancelled; Shipped → Delivered | DeliveryFailed; DeliveryFailed → Shipped | Cancelled; Delivered, Cancelled, Rejected are final. Shipped requires `shipment` (active courier; tracking number, date (default now), note optional). Stock returns automatically on Rejected and on Cancelled before shipping; cancelling after DeliveryFailed requires `restock` (true = goods back on stock). History, shipment, stock movements, audit and the customer email (P1.7: every target except DeliveryFailed; Rejected uses the cancellation email; `customerMessage` is included) are one transaction. Errors: 400 VALIDATION_FAILED (`shipment`, `shipment.courierCompanyId`, `shipment.shippedAt`, `restock`); 404 NOT_FOUND; 409 INVALID_STATUS_TRANSITION (with `allowedNextStatuses`), CONCURRENT_EDIT (stale `version`).",
         "operationId": "ChangeAdminOrderStatus",
         "parameters": [
           {
@@ -3758,6 +3820,381 @@
           }
         ]
       }
+    },
+    "/api/v1/admin/emails": {
+      "get": {
+        "tags": [
+          "Admin – emails"
+        ],
+        "summary": "Outbox emails, newest first: state, attempts and last error. No bodies.",
+        "description": "`status`: Pending, Processing, Sent, Dead (several comma-separated and/or repeated). `orderId`: one order. Paging `page`, `pageSize`. Errors: 400 VALIDATION_FAILED.",
+        "operationId": "ListAdminEmails",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "name": "orderId",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "pageSize",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiProblem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiProblem"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PagedResultOfAdminEmailItem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiProblem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": [ ]
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/emails/{id}": {
+      "get": {
+        "tags": [
+          "Admin – emails"
+        ],
+        "summary": "One outbox email with every send attempt (`attemptLog`).",
+        "description": "Errors: 404 NOT_FOUND.",
+        "operationId": "GetAdminEmail",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiProblem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiProblem"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminEmailDetail"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiProblem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": [ ]
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/emails/{id}/retry": {
+      "post": {
+        "tags": [
+          "Admin – emails"
+        ],
+        "summary": "Send a Dead email again (\"Pošalji ponovo\"): Pending, due now, attempts start over.",
+        "description": "When the email's tracking code is no longer stored, a new code is issued for the order. Errors: 404 NOT_FOUND; 409 EMAIL_NOT_RETRYABLE (the email is not Dead).",
+        "operationId": "RetryAdminEmail",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiProblem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiProblem"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminEmailItem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiProblem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiProblem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": [ ]
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/orders/{id}/emails/resend-confirmation": {
+      "post": {
+        "tags": [
+          "Admin – orders"
+        ],
+        "summary": "Queue the order confirmation again with a new tracking code. Returns the queued email.",
+        "description": "Earlier codes stay valid (use `tracking/revoke` first to invalidate them). Allowed in every status. Errors: 404 NOT_FOUND.",
+        "operationId": "ResendAdminOrderConfirmation",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiProblem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiProblem"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminEmailItem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiProblem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": [ ]
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/orders/{id}/tracking/revoke": {
+      "post": {
+        "tags": [
+          "Admin – orders"
+        ],
+        "summary": "Revoke every tracking code of the order issued so far, including codes in emails not yet sent.",
+        "description": "Revoked codes give 404 TRACKING_NOT_FOUND. Codes issued later (next status email, resent confirmation) work. Errors: 404 NOT_FOUND.",
+        "operationId": "RevokeAdminOrderTracking",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiProblem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiProblem"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RevokeTrackingResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiProblem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": [ ]
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -3902,6 +4339,132 @@
           }
         }
       },
+      "AdminEmailAttempt": {
+        "required": [
+          "attemptNumber",
+          "succeeded",
+          "providerMessageId",
+          "error",
+          "createdAt"
+        ],
+        "type": "object",
+        "properties": {
+          "attemptNumber": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "succeeded": {
+            "type": "boolean"
+          },
+          "providerMessageId": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "error": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "AdminEmailDetail": {
+        "required": [
+          "email",
+          "attemptLog"
+        ],
+        "type": "object",
+        "properties": {
+          "email": {
+            "$ref": "#/components/schemas/AdminEmailItem"
+          },
+          "attemptLog": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminEmailAttempt"
+            }
+          }
+        }
+      },
+      "AdminEmailItem": {
+        "required": [
+          "id",
+          "template",
+          "status",
+          "orderId",
+          "orderNumber",
+          "recipient",
+          "attempts",
+          "lastError",
+          "nextAttemptAt",
+          "createdAt",
+          "sentAt",
+          "isResent"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "template": {
+            "$ref": "#/components/schemas/EmailTemplate"
+          },
+          "status": {
+            "$ref": "#/components/schemas/EmailOutboxStatus"
+          },
+          "orderId": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "uuid"
+          },
+          "orderNumber": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "recipient": {
+            "type": "string"
+          },
+          "attempts": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "lastError": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "nextAttemptAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "sentAt": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          },
+          "isResent": {
+            "type": "boolean"
+          }
+        }
+      },
       "AdminMeResponse": {
         "required": [
           "id",
@@ -3994,7 +4557,8 @@
           "timeline",
           "notes",
           "shipments",
-          "allowedNextStatuses"
+          "allowedNextStatuses",
+          "emails"
         ],
         "type": "object",
         "properties": {
@@ -4081,6 +4645,12 @@
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/AllowedStatusTransition"
+            }
+          },
+          "emails": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminEmailItem"
             }
           }
         }
@@ -5571,6 +6141,24 @@
           }
         }
       },
+      "EmailOutboxStatus": {
+        "enum": [
+          "Pending",
+          "Processing",
+          "Sent",
+          "Dead"
+        ]
+      },
+      "EmailTemplate": {
+        "enum": [
+          "OrderReceived",
+          "OrderAccepted",
+          "OrderPreparing",
+          "OrderShipped",
+          "OrderDelivered",
+          "OrderCancelled"
+        ]
+      },
       "HealthResponse": {
         "required": [
           "status"
@@ -5805,6 +6393,40 @@
             }
           },
           "total": {
+            "type": "integer",
+            "format": "int32"
+          }
+        }
+      },
+      "PagedResultOfAdminEmailItem": {
+        "required": [
+          "items",
+          "page",
+          "pageSize",
+          "totalItems",
+          "totalPages"
+        ],
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminEmailItem"
+            }
+          },
+          "page": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "pageSize": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "totalItems": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "totalPages": {
             "type": "integer",
             "format": "int32"
           }
@@ -6792,6 +7414,18 @@
           }
         }
       },
+      "RevokeTrackingResponse": {
+        "required": [
+          "revokedCount"
+        ],
+        "type": "object",
+        "properties": {
+          "revokedCount": {
+            "type": "integer",
+            "format": "int32"
+          }
+        }
+      },
       "SaveCategoryRequest": {
         "required": [
           "name",
@@ -6982,6 +7616,119 @@
             ]
           },
           "url": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
+      "TrackingLookupRequest": {
+        "required": [
+          "code"
+        ],
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
+      "TrackingLookupResponse": {
+        "required": [
+          "orderNumber",
+          "status",
+          "statusLabel",
+          "placedAt",
+          "timeline",
+          "shipment"
+        ],
+        "type": "object",
+        "properties": {
+          "orderNumber": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/OrderStatus"
+          },
+          "statusLabel": {
+            "type": "string"
+          },
+          "placedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "timeline": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TrackingTimelineEntry"
+            }
+          },
+          "shipment": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TrackingShipment"
+              }
+            ]
+          }
+        }
+      },
+      "TrackingShipment": {
+        "required": [
+          "courierName",
+          "trackingNumber",
+          "trackingUrl",
+          "shippedAt"
+        ],
+        "type": "object",
+        "properties": {
+          "courierName": {
+            "type": "string"
+          },
+          "trackingNumber": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "trackingUrl": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "shippedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "TrackingTimelineEntry": {
+        "required": [
+          "status",
+          "label",
+          "at",
+          "customerMessage"
+        ],
+        "type": "object",
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/OrderStatus"
+          },
+          "label": {
+            "type": "string"
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "customerMessage": {
             "type": [
               "null",
               "string"
@@ -7320,6 +8067,9 @@
       "name": "Checkout"
     },
     {
+      "name": "Tracking"
+    },
+    {
       "name": "Catalog"
     },
     {
@@ -7351,6 +8101,9 @@
     },
     {
       "name": "Admin – settings"
+    },
+    {
+      "name": "Admin – emails"
     }
   ]
 }
