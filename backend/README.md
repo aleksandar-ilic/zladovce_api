@@ -13,6 +13,9 @@ administration, the public catalog, inventory (adjustments, thresholds, movement
 `IInventoryService` for checkout), media uploads (pre-signed POST, image processing to WebP renditions, the image
 processor Lambda), MinIO for local development, and the database role bootstrap of the migration Lambda.
 
+Phase 4 (Storefront, backend part) adds the public cart quote (`POST /api/v1/cart/quote`, `ICartPricingService`, which
+Phase 5 checkout reuses) and the SEO routes for prerendering and the sitemap (`GET /api/v1/seo/routes`). No migration.
+
 ## Layout
 
 ```
@@ -36,7 +39,7 @@ backend/
 ```
 
 Dependency rule: `Domain` ← `Application` ← `Infrastructure` ← `Api` / `Lambda`. Each project is organised by
-module folder (`Identity`, `StoreSettings`, `Audit`, `Categories`, `Catalog`, `Inventory`, `Media`, `Common`).
+module folder (`Identity`, `StoreSettings`, `Audit`, `Categories`, `Catalog`, `Inventory`, `Media`, `Cart`, `Seo`, `Common`).
 
 ## Prerequisites
 
@@ -197,6 +200,68 @@ Audit: an EF Core `SaveChanges` interceptor writes one `audit_logs` row per crea
 deleted category, product, variant, product image and inventory record (`{Entity}.{Created|Updated|Archived|Restored|Deleted}`,
 changed fields as `{ "field": { "old": …, "new": … } }`, administrator id, IP), in the same transaction. Stock
 quantity changes bypass the change tracker and are audited explicitly (`Inventory.Adjusted`).
+
+## Endpoints (Phase 4)
+
+Public (no authentication):
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/api/v1/cart/quote` | Prices the browser cart from the database |
+| GET | `/api/v1/seo/routes` | `{ categories: [{ slug, updatedAt }], products: [{ slug, updatedAt }] }` of visible items, sorted by slug |
+
+### Cart quote
+
+Request (`items` required, 1–50 lines; per line `variantId` and `quantity` required, `knownUnitPrice` optional):
+
+```json
+{ "items": [ { "variantId": "0193…", "quantity": 2, "knownUnitPrice": 590.00 } ] }
+```
+
+- Quantity 1–99 per line. Lines with the same variant are merged (quantities added, position of the first line, first
+  `knownUnitPrice` that was sent). The client never sends prices that are used: everything is priced from the database.
+- `knownUnitPrice` is the `unitPrice` of the previous quote that the browser cart stored. When the current price differs,
+  the quote contains a `priceChanged` adjustment with `previousUnitPrice` and `unitPrice`. Omit it (or send `null`) and
+  price changes are not reported.
+- A line is **sellable** when the variant is active and not archived, the product is active and not archived, its category
+  is active and not archived, and `maxOrderQuantity = min(stock, Catalog:MaxOrderQuantity) > 0` (the catalog rule).
+
+Response:
+
+| Member | Meaning |
+|---|---|
+| `lines[]` | `{ variantId, productId, productName, productSlug, variantName, sku, unitAmount, measurementUnit, image (catalog image shape, main image) \| null, unitPrice, regularPrice, discountPrice \| null, requestedQuantity, quantity, lineTotal, maxOrderQuantity }`; `quantity = min(requestedQuantity, maxOrderQuantity)`, `lineTotal = unitPrice × quantity`. Request order |
+| `adjustments[]` | `{ variantId, reason, requestedQuantity, availableQuantity, previousUnitPrice \| null, unitPrice \| null }`, request order. `unavailable`: removed from `lines`, `availableQuantity` 0. `quantityReduced`: capped, `availableQuantity` = the line quantity. `priceChanged`: both prices set. One variant can have `quantityReduced` and `priceChanged` |
+| `subtotal` | Sum of `lineTotal` |
+| `shipping` | `{ enabled, price (charged for this cart), basePrice (configured), freeShippingThreshold \| null, isFree, amountUntilFreeShipping \| null }` |
+| `minOrderAmount`, `meetsMinimumOrder`, `amountUntilMinimumOrder` | Minimum order, compared with the subtotal |
+| `total` | `subtotal + shipping.price` |
+| `canCheckout` | `false` when shipping is disabled, there are no lines or the minimum is not met |
+| `currency` | `"RSD"` |
+
+Rules (`CartTotals` in the domain, the single implementation): money rounded to two decimals; shipping is charged
+unless `subtotal >= freeShippingThreshold`; nothing is charged for an empty cart or while shipping is disabled;
+`amountUntilFreeShipping` is set only when shipping is enabled, costs something and the threshold is not reached;
+the minimum order compares the subtotal (without shipping). The exact stock is never returned.
+
+Errors: `400 VALIDATION_FAILED` with field paths (`items`, `items[i].quantity`, `items[i].variantId`,
+`items[i].knownUnitPrice`); `400 BAD_REQUEST` for malformed JSON or a value of the wrong JSON type (a malformed uuid,
+a quantity sent as a string), as everywhere else in the API.
+
+`ICartPricingService.QuoteAsync(items)` (Application, no HTTP types) does one query for all requested variants (product,
+category check, main image, stock) plus one for the store settings, and joins the caller's transaction. Phase 5
+checkout calls it inside the order transaction and then deducts stock with `IInventoryService`. Not rate limited yet
+(Phase 5/8).
+
+CORS: the storefront origin (`http://localhost:4200` in development) is in `Cors:AllowedOrigins`; the policy allows
+`POST` and the `Content-Type` header, so the JSON preflight succeeds (integration-tested).
+
+### SEO routes
+
+Visibility is the public catalog's (`CatalogVisibility`): active, not archived categories (also empty ones, whose
+page exists) and visible products. `updatedAt` is the category's/product's `updated_at` (product edits, variant and
+image changes touch it; stock changes do not). Blog posts and blog categories are added in Phase 7 as new members of
+the same response (`{ slug, updatedAt }`); there are no placeholder entries.
 
 ## Images
 

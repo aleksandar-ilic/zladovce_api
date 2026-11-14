@@ -36,9 +36,7 @@ public sealed class PublicCatalogService(
 
     public async Task<PublicCategoryListResponse> GetCategoriesAsync(CancellationToken cancellationToken)
     {
-        var categories = await db.Categories
-            .AsNoTracking()
-            .Where(c => c.IsActive && c.DeletedAt == null)
+        var categories = await CatalogVisibility.VisibleCategories(db)
             .OrderBy(c => c.SortOrder).ThenBy(c => c.Name).ThenBy(c => c.Id)
             .ToListAsync(cancellationToken);
 
@@ -219,13 +217,7 @@ public sealed class PublicCatalogService(
     }
 
     /// <summary>The visibility rule of the shop.</summary>
-    private IQueryable<Product> VisibleProducts() =>
-        db.Products
-            .AsNoTracking()
-            .Where(p => p.IsActive
-                && p.DeletedAt == null
-                && db.Categories.Any(c => c.Id == p.CategoryId && c.IsActive && c.DeletedAt == null)
-                && p.Variants.Any(v => v.IsActive && v.DeletedAt == null));
+    private IQueryable<Product> VisibleProducts() => CatalogVisibility.VisibleProducts(db);
 
     private static List<ProductVariant> SellableVariants(Product product) =>
         [.. product.CurrentVariants.Where(v => v.IsSellable)];

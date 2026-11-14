@@ -23,6 +23,7 @@ public static class EndpointMapping
         var api = app.MapGroup(ApiBasePath).WithRequestValidation();
         api.MapStoreEndpoints();
         api.MapPublicCatalogEndpoints();
+        api.MapStorefrontEndpoints();
 
         var admin = api.MapGroup("/admin")
             .RequireAuthorization(AuthPolicies.AdminAny)

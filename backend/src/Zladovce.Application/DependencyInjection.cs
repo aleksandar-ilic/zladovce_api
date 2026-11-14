@@ -2,12 +2,14 @@ using FluentValidation;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Zladovce.Application.Audit;
+using Zladovce.Application.Cart;
 using Zladovce.Application.Catalog;
 using Zladovce.Application.Categories;
 using Zladovce.Application.Common;
 using Zladovce.Application.Inventory;
 using Zladovce.Application.Media;
 using Zladovce.Application.Identity;
+using Zladovce.Application.Seo;
 using Zladovce.Application.StoreSettings;
 
 namespace Zladovce.Application;
@@ -28,6 +30,8 @@ public static class DependencyInjection
         services.AddScoped<IPublicCatalogService, PublicCatalogService>();
         services.AddScoped<IInventoryService, InventoryService>();
         services.AddScoped<IMediaUploadService, MediaUploadService>();
+        services.AddScoped<ICartPricingService, CartPricingService>();
+        services.AddScoped<ISeoRoutesService, SeoRoutesService>();
         services.AddImageProcessing();
 
         // Every request DTO validator in this assembly; the API runs them automatically.

@@ -79,6 +79,28 @@
         }
       }
     },
+    "/api/v1/seo/routes": {
+      "get": {
+        "tags": [
+          "SEO"
+        ],
+        "summary": "Slugs and last-modified times of the visible categories and products, for prerendering and the sitemap.",
+        "description": "Same visibility as the public catalog. Blog posts are added in a later phase as a new member.",
+        "operationId": "GetSeoRoutes",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SeoRoutesResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/catalog/categories": {
       "get": {
         "tags": [
@@ -372,6 +394,48 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/PublicAvailabilityResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/cart/quote": {
+      "post": {
+        "tags": [
+          "Cart"
+        ],
+        "summary": "Prices the browser cart from the database: lines, adjustments, subtotal, shipping, minimum order, total.",
+        "description": "The client sends variant ids and quantities only; every price comes from the database. Lines with the same variant are merged. A variant that cannot be bought (unknown, inactive, archived, hidden product or category, out of stock) is left out of `lines` and reported as `unavailable` in `adjustments`; a quantity above `maxOrderQuantity` is reduced and reported as `quantityReduced`; with the optional `knownUnitPrice` a different current price is reported as `priceChanged`. Shipping is charged unless the subtotal is at or above the free-shipping threshold; the minimum order compares the subtotal. `canCheckout` is false when shipping is disabled, there are no lines or the minimum is not met. The exact stock is never returned. Errors: 400 VALIDATION_FAILED (`items` empty or more than 50, `items[i].quantity` not 1–99, `items[i].variantId` missing or empty, `items[i].knownUnitPrice` invalid, a required member missing); 400 BAD_REQUEST (malformed JSON, a value of the wrong type such as a malformed uuid).",
+        "operationId": "QuoteCart",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CartQuoteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CartQuoteResponse"
                 }
               }
             }
@@ -3027,6 +3091,288 @@
           }
         }
       },
+      "CartAdjustmentReason": {
+        "enum": [
+          "unavailable",
+          "quantityReduced",
+          "priceChanged"
+        ]
+      },
+      "CartQuoteAdjustment": {
+        "required": [
+          "variantId",
+          "reason",
+          "requestedQuantity",
+          "availableQuantity",
+          "previousUnitPrice",
+          "unitPrice"
+        ],
+        "type": "object",
+        "properties": {
+          "variantId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "reason": {
+            "$ref": "#/components/schemas/CartAdjustmentReason"
+          },
+          "requestedQuantity": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "availableQuantity": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "previousUnitPrice": {
+            "type": [
+              "null",
+              "number"
+            ],
+            "format": "double"
+          },
+          "unitPrice": {
+            "type": [
+              "null",
+              "number"
+            ],
+            "format": "double"
+          }
+        }
+      },
+      "CartQuoteItemRequest": {
+        "required": [
+          "variantId",
+          "quantity"
+        ],
+        "type": "object",
+        "properties": {
+          "variantId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "quantity": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "knownUnitPrice": {
+            "type": [
+              "null",
+              "number"
+            ],
+            "format": "double"
+          }
+        }
+      },
+      "CartQuoteLine": {
+        "required": [
+          "variantId",
+          "productId",
+          "productName",
+          "productSlug",
+          "variantName",
+          "sku",
+          "unitAmount",
+          "measurementUnit",
+          "image",
+          "unitPrice",
+          "regularPrice",
+          "discountPrice",
+          "requestedQuantity",
+          "quantity",
+          "lineTotal",
+          "maxOrderQuantity"
+        ],
+        "type": "object",
+        "properties": {
+          "variantId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "productId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "productName": {
+            "type": "string"
+          },
+          "productSlug": {
+            "type": "string"
+          },
+          "variantName": {
+            "type": "string"
+          },
+          "sku": {
+            "type": "string"
+          },
+          "unitAmount": {
+            "type": "number",
+            "format": "double"
+          },
+          "measurementUnit": {
+            "$ref": "#/components/schemas/MeasurementUnit"
+          },
+          "image": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PublicImageResponse"
+              }
+            ]
+          },
+          "unitPrice": {
+            "type": "number",
+            "format": "double"
+          },
+          "regularPrice": {
+            "type": "number",
+            "format": "double"
+          },
+          "discountPrice": {
+            "type": [
+              "null",
+              "number"
+            ],
+            "format": "double"
+          },
+          "requestedQuantity": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "quantity": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "lineTotal": {
+            "type": "number",
+            "format": "double"
+          },
+          "maxOrderQuantity": {
+            "type": "integer",
+            "format": "int32"
+          }
+        }
+      },
+      "CartQuoteRequest": {
+        "required": [
+          "items"
+        ],
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CartQuoteItemRequest"
+            }
+          }
+        }
+      },
+      "CartQuoteResponse": {
+        "required": [
+          "lines",
+          "adjustments",
+          "subtotal",
+          "shipping",
+          "minOrderAmount",
+          "meetsMinimumOrder",
+          "amountUntilMinimumOrder",
+          "total",
+          "canCheckout",
+          "currency"
+        ],
+        "type": "object",
+        "properties": {
+          "lines": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CartQuoteLine"
+            }
+          },
+          "adjustments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CartQuoteAdjustment"
+            }
+          },
+          "subtotal": {
+            "type": "number",
+            "format": "double"
+          },
+          "shipping": {
+            "$ref": "#/components/schemas/CartQuoteShipping"
+          },
+          "minOrderAmount": {
+            "type": [
+              "null",
+              "number"
+            ],
+            "format": "double"
+          },
+          "meetsMinimumOrder": {
+            "type": "boolean"
+          },
+          "amountUntilMinimumOrder": {
+            "type": [
+              "null",
+              "number"
+            ],
+            "format": "double"
+          },
+          "total": {
+            "type": "number",
+            "format": "double"
+          },
+          "canCheckout": {
+            "type": "boolean"
+          },
+          "currency": {
+            "type": "string"
+          }
+        }
+      },
+      "CartQuoteShipping": {
+        "required": [
+          "enabled",
+          "price",
+          "basePrice",
+          "freeShippingThreshold",
+          "isFree",
+          "amountUntilFreeShipping"
+        ],
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "price": {
+            "type": "number",
+            "format": "double"
+          },
+          "basePrice": {
+            "type": "number",
+            "format": "double"
+          },
+          "freeShippingThreshold": {
+            "type": [
+              "null",
+              "number"
+            ],
+            "format": "double"
+          },
+          "isFree": {
+            "type": "boolean"
+          },
+          "amountUntilFreeShipping": {
+            "type": [
+              "null",
+              "number"
+            ],
+            "format": "double"
+          }
+        }
+      },
       "CategoryImageResponse": {
         "required": [
           "key",
@@ -4265,6 +4611,43 @@
           }
         }
       },
+      "SeoRoute": {
+        "required": [
+          "slug",
+          "updatedAt"
+        ],
+        "type": "object",
+        "properties": {
+          "slug": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "SeoRoutesResponse": {
+        "required": [
+          "categories",
+          "products"
+        ],
+        "type": "object",
+        "properties": {
+          "categories": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SeoRoute"
+            }
+          },
+          "products": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SeoRoute"
+            }
+          }
+        }
+      },
       "SetLowStockThresholdRequest": {
         "required": [
           "lowStockThreshold"
@@ -4464,7 +4847,13 @@
       "name": "Store"
     },
     {
+      "name": "SEO"
+    },
+    {
       "name": "Catalog"
+    },
+    {
+      "name": "Cart"
     },
     {
       "name": "Admin session"

@@ -43,7 +43,10 @@ public sealed record PublicProductListCriteria(
 public sealed record PublicImageResponse(string BaseUrl, IReadOnlyList<int> Widths, int Width, int Height, string? AltText)
 {
     public static PublicImageResponse From(MediaOptions options, ProductImage image) =>
-        new(options.UrlFor(image.StorageKey), RenditionPlan.WidthsFor(image.Width), image.Width, image.Height, image.AltText);
+        Create(options, image.StorageKey, image.Width, image.Height, image.AltText);
+
+    public static PublicImageResponse Create(MediaOptions options, string storageKey, int width, int height, string? altText) =>
+        new(options.UrlFor(storageKey), RenditionPlan.WidthsFor(width), width, height, altText);
 }
 
 public sealed record PublicSeo(string? Title, string? Description);

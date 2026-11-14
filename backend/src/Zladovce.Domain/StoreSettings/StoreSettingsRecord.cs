@@ -1,3 +1,4 @@
+using Zladovce.Domain.Cart;
 using Zladovce.Domain.Common;
 
 namespace Zladovce.Domain.StoreSettings;
@@ -98,6 +99,9 @@ public sealed class StoreSettingsRecord
         MinOrderAmount = minOrderAmount;
         Touch(adminId, now);
     }
+
+    /// <summary>The shipping and minimum-order rules as a value, for cart and order totals (<see cref="CartTotals"/>).</summary>
+    public ShippingTerms ShippingTerms => new(ShippingEnabled, ShippingPrice, FreeShippingThreshold, MinOrderAmount);
 
     /// <summary>Shipping cost for an order subtotal according to the current settings.</summary>
     public decimal ShippingCostFor(decimal subtotal)
