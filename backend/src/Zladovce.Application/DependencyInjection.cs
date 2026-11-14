@@ -9,7 +9,9 @@ using Zladovce.Application.Common;
 using Zladovce.Application.Inventory;
 using Zladovce.Application.Media;
 using Zladovce.Application.Identity;
+using Zladovce.Application.Orders;
 using Zladovce.Application.Seo;
+using Zladovce.Application.Shipping;
 using Zladovce.Application.StoreSettings;
 
 namespace Zladovce.Application;
@@ -32,6 +34,9 @@ public static class DependencyInjection
         services.AddScoped<IMediaUploadService, MediaUploadService>();
         services.AddScoped<ICartPricingService, CartPricingService>();
         services.AddScoped<ISeoRoutesService, SeoRoutesService>();
+        services.AddScoped<ICheckoutService, CheckoutService>();
+        services.AddScoped<IOrderAdminService, OrderAdminService>();
+        services.AddScoped<ICourierService, CourierService>();
         services.AddImageProcessing();
 
         // Every request DTO validator in this assembly; the API runs them automatically.

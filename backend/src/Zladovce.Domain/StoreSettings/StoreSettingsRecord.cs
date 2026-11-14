@@ -100,6 +100,33 @@ public sealed class StoreSettingsRecord
         Touch(adminId, now);
     }
 
+    /// <summary>
+    /// Replaces every value the Owner can edit (the logo is not part of it). Texts are trimmed, blank optional texts become
+    /// null. The money rules are those of <see cref="SetShippingPricing"/>.
+    /// </summary>
+    public void Update(StoreSettingsValues values, Guid adminId, DateTimeOffset now)
+    {
+        ArgumentNullException.ThrowIfNull(values);
+        if (string.IsNullOrWhiteSpace(values.StoreName))
+        {
+            throw new DomainException("Store name is required.");
+        }
+
+        SetShippingPricing(values.ShippingEnabled, values.ShippingPrice, values.FreeShippingThreshold, values.MinOrderAmount, adminId, now);
+
+        StoreName = values.StoreName.Trim();
+        ContactEmail = Text.NullIfBlank(values.ContactEmail);
+        Phone = Text.NullIfBlank(values.Phone);
+        BusinessAddress = Text.NullIfBlank(values.BusinessAddress);
+        EstimatedDeliveryText = Text.NullIfBlank(values.EstimatedDeliveryText);
+        DeliveryInfo = Text.NullIfBlank(values.DeliveryInfo);
+        FacebookUrl = Text.NullIfBlank(values.FacebookUrl);
+        InstagramUrl = Text.NullIfBlank(values.InstagramUrl);
+        OtherLinks = [.. values.OtherLinks.Select(l => new StoreLink(l.Label.Trim(), l.Url.Trim()))];
+        DefaultSeoTitle = Text.NullIfBlank(values.DefaultSeoTitle);
+        DefaultSeoDescription = Text.NullIfBlank(values.DefaultSeoDescription);
+    }
+
     /// <summary>The shipping and minimum-order rules as a value, for cart and order totals (<see cref="CartTotals"/>).</summary>
     public ShippingTerms ShippingTerms => new(ShippingEnabled, ShippingPrice, FreeShippingThreshold, MinOrderAmount);
 

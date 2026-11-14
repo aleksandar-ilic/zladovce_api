@@ -172,11 +172,4 @@ public class PublicCatalogTests : IDisposable
         var badLimit = await _client.GetAsync($"/api/v1/catalog/products/{first.GetProperty("slug").GetString()}/related?limit=50");
         await ResponseAssertions.AssertProblemAsync(badLimit, HttpStatusCode.BadRequest, "VALIDATION_FAILED");
     }
-
-    [Fact]
-    public async Task Bestsellers_endpoint_does_not_exist_yet()
-    {
-        var response = await _client.GetAsync("/api/v1/catalog/bestsellers");
-        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
-    }
 }

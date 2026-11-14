@@ -166,7 +166,10 @@ public static class CartQuoteCalculator
             var quantity = Math.Min(item.Quantity, maxOrderQuantity);
             if (quantity < item.Quantity)
             {
-                adjustments.Add(new CartQuoteAdjustment(item.VariantId, CartAdjustmentReason.QuantityReduced, item.Quantity, quantity, null, null));
+                // The stock decides when it is below the cap; otherwise the cap is what the customer runs into.
+                var limitReason = variant.QuantityOnHand < maxOrderQuantityCap ? QuantityLimitReason.Stock : QuantityLimitReason.OrderLimit;
+                adjustments.Add(new CartQuoteAdjustment(
+                    item.VariantId, CartAdjustmentReason.QuantityReduced, item.Quantity, quantity, null, null, limitReason));
             }
 
             var unitPrice = Pricing.EffectivePrice(variant.RegularPrice, variant.DiscountPrice);

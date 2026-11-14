@@ -29,6 +29,8 @@ public static class PublicCatalogEndpoints
     public const int MaxAvailabilityIds = 100;
     public const int DefaultRelatedLimit = 4;
     public const int MaxRelatedLimit = 12;
+    public const int DefaultBestsellerLimit = 8;
+    public const int MaxBestsellerLimit = 24;
 
     public static void MapPublicCatalogEndpoints(this IEndpointRouteBuilder api)
     {
@@ -52,7 +54,8 @@ public static class PublicCatalogEndpoints
             .WithSummary("Product grid: visible products with the listing price (lowest variant price) and availability.")
             .WithDescription(
                 "Visible = active, not archived, in an active category, with at least one active variant. " +
-                "Sort `bestselling` is accepted and ordered like `newest` until order data exists. Errors: 400 VALIDATION_FAILED.")
+                "Sort `bestselling`: pieces sold in Delivered orders whose delivery is in the last 90 days (`Catalog:BestsellerWindowDays`), " +
+                "same metric as `/catalog/bestsellers`; products without such sales follow, newest first. Errors: 400 VALIDATION_FAILED.")
             .Problems(StatusCodes.Status400BadRequest);
 
         catalog.MapGet("/products/{slug}", async (string slug, IPublicCatalogService service, CancellationToken ct) =>
@@ -80,6 +83,23 @@ public static class PublicCatalogEndpoints
             .WithSummary("Other visible products of the same category (featured first, then newest). `limit` 1–12, default 4.")
             .WithDescription("Errors: 400 VALIDATION_FAILED; 404 NOT_FOUND.")
             .Problems(StatusCodes.Status400BadRequest, StatusCodes.Status404NotFound);
+
+        catalog.MapGet("/bestsellers", async ([FromQuery(Name = "limit")] int? limit, IPublicCatalogService service, CancellationToken ct) =>
+            {
+                var take = limit ?? DefaultBestsellerLimit;
+                if (take is < 1 or > MaxBestsellerLimit)
+                {
+                    throw new RequestValidationException("limit", $"Broj proizvoda mora biti između 1 i {MaxBestsellerLimit}.");
+                }
+
+                return TypedResults.Ok(await service.GetBestsellersAsync(take, ct));
+            })
+            .WithName("GetCatalogBestsellers")
+            .WithSummary("Best-selling visible products from real Delivered orders of the last 90 days. `limit` 1–24, default 8.")
+            .WithDescription(
+                "Ordered by pieces sold (ties: newest product first). Only products that sold in that window are listed, so the list is " +
+                "empty until orders are delivered; nothing is invented. Errors: 400 VALIDATION_FAILED.")
+            .Problems(StatusCodes.Status400BadRequest);
 
         catalog.MapGet("/availability", async (
                 [FromQuery(Name = "variantIds")] string[]? variantIds,

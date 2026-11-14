@@ -8,6 +8,7 @@ using Zladovce.Application.Media;
 using Zladovce.Domain.Catalog;
 using Zladovce.Domain.Categories;
 using Zladovce.Domain.Inventory;
+using Zladovce.Domain.Orders;
 
 namespace Zladovce.Application.Catalog;
 
@@ -23,16 +24,25 @@ public interface IPublicCatalogService
     Task<PublicProductResponse> GetProductAsync(string slug, CancellationToken cancellationToken);
     Task<PublicProductListResponse> GetRelatedProductsAsync(string slug, int limit, CancellationToken cancellationToken);
     Task<PublicAvailabilityResponse> GetAvailabilityAsync(IReadOnlyCollection<Guid> variantIds, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Visible products ordered by pieces sold in Delivered orders whose delivery falls in the last
+    /// <see cref="CatalogOptions.BestsellerWindowDays"/> days (ties: newest product first). Products that sold nothing in that
+    /// window are not included, so the list is empty until orders are delivered.
+    /// </summary>
+    Task<PublicProductListResponse> GetBestsellersAsync(int limit, CancellationToken cancellationToken);
 }
 
 public sealed class PublicCatalogService(
     IZladovceDbContext db,
     IInventoryService inventory,
     IOptions<MediaOptions> mediaOptions,
-    IOptions<CatalogOptions> catalogOptions) : IPublicCatalogService
+    IOptions<CatalogOptions> catalogOptions,
+    TimeProvider timeProvider) : IPublicCatalogService
 {
     private readonly MediaOptions _media = mediaOptions.Value;
     private readonly int _maxOrderQuantity = catalogOptions.Value.MaxOrderQuantity;
+    private readonly int _bestsellerWindowDays = Math.Max(1, catalogOptions.Value.BestsellerWindowDays);
 
     public async Task<PublicCategoryListResponse> GetCategoriesAsync(CancellationToken cancellationToken)
     {
@@ -84,11 +94,14 @@ public sealed class PublicCatalogService(
         }
 
         // The listing price in SQL: the lowest effective price of the variants on sale (same rule as ListingPrice in the domain).
+        var sold = SoldQuantities();
+        var bySales = criteria.Sort == PublicProductSort.Bestselling;
         var priced = products.Select(p => new
         {
             p.Id,
             p.Name,
             p.CreatedAt,
+            Sold = bySales ? sold.Where(s => s.ProductId == p.Id).Sum(s => (int?)s.Quantity) ?? 0 : 0,
             Price = p.Variants.Where(v => v.IsActive && v.DeletedAt == null).Min(v => v.DiscountPrice ?? v.RegularPrice),
             InStock = p.Variants.Any(v => v.IsActive && v.DeletedAt == null
                 && db.Inventory.Any(i => i.VariantId == v.Id && i.QuantityOnHand > 0)),
@@ -117,7 +130,8 @@ public sealed class PublicCatalogService(
             PublicProductSort.PriceDescending => priced.OrderByDescending(p => p.Price).ThenBy(p => p.Name).ThenBy(p => p.Id),
             PublicProductSort.Name => priced.OrderBy(p => p.Name).ThenBy(p => p.Id),
 
-            // Bestselling needs order data (Phase 5); until then it is the newest-first order.
+            // Pieces sold in delivered orders of the bestseller window (same metric as /catalog/bestsellers); ties newest first.
+            PublicProductSort.Bestselling => priced.OrderByDescending(p => p.Sold).ThenByDescending(p => p.CreatedAt).ThenByDescending(p => p.Id),
             _ => priced.OrderByDescending(p => p.CreatedAt).ThenByDescending(p => p.Id),
         };
 
@@ -216,8 +230,46 @@ public sealed class PublicCatalogService(
         })]);
     }
 
+    public async Task<PublicProductListResponse> GetBestsellersAsync(int limit, CancellationToken cancellationToken)
+    {
+        var sold = SoldQuantities();
+        var ids = await VisibleProducts()
+            .Select(p => new { p.Id, p.CreatedAt, Sold = sold.Where(s => s.ProductId == p.Id).Sum(s => (int?)s.Quantity) ?? 0 })
+            .Where(p => p.Sold > 0)
+            .OrderByDescending(p => p.Sold).ThenByDescending(p => p.CreatedAt).ThenByDescending(p => p.Id)
+            .Take(limit)
+            .Select(p => p.Id)
+            .ToListAsync(cancellationToken);
+
+        return new PublicProductListResponse(await LoadListItemsAsync(ids, cancellationToken));
+    }
+
     /// <summary>The visibility rule of the shop.</summary>
     private IQueryable<Product> VisibleProducts() => CatalogVisibility.VisibleProducts(db);
+
+    private sealed class SoldLine
+    {
+        public Guid ProductId { get; init; }
+        public int Quantity { get; init; }
+    }
+
+    /// <summary>
+    /// Order lines of Delivered orders whose Delivered transition is inside the bestseller window, with the product of the
+    /// variant. Cancelled, rejected and undelivered orders never count.
+    /// </summary>
+    private IQueryable<SoldLine> SoldQuantities()
+    {
+        var since = timeProvider.GetUtcNow().AddDays(-_bestsellerWindowDays);
+        var delivered = db.OrderStatusHistory
+            .Where(h => h.NewStatus == OrderStatus.Delivered && h.CreatedAt >= since)
+            .Select(h => h.OrderId);
+
+        return from item in db.OrderItems
+               join order in db.Orders on item.OrderId equals order.Id
+               join variant in db.ProductVariants on item.VariantId equals variant.Id
+               where order.Status == OrderStatus.Delivered && delivered.Contains(order.Id)
+               select new SoldLine { ProductId = variant.ProductId, Quantity = item.Quantity };
+    }
 
     private static List<ProductVariant> SellableVariants(Product product) =>
         [.. product.CurrentVariants.Where(v => v.IsSellable)];

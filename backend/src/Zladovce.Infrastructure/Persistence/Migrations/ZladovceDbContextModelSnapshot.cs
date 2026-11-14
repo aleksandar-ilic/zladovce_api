@@ -383,6 +383,91 @@ namespace Zladovce.Infrastructure.Persistence.Migrations
                         });
                 });
 
+            modelBuilder.Entity("Zladovce.Domain.Customers.Address", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("City")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("city");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<Guid>("CustomerId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("customer_id");
+
+                    b.Property<string>("PostalCode")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("postal_code");
+
+                    b.Property<string>("Street")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("street");
+
+                    b.HasKey("Id")
+                        .HasName("pk_addresses");
+
+                    b.HasIndex("CustomerId")
+                        .HasDatabaseName("ix_addresses_customer_id");
+
+                    b.ToTable("addresses", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_addresses_postal_code", "postal_code ~ '^[0-9]{5}$'");
+                        });
+                });
+
+            modelBuilder.Entity("Zladovce.Domain.Customers.Customer", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("Email")
+                        .IsRequired()
+                        .HasColumnType("citext")
+                        .HasColumnName("email");
+
+                    b.Property<string>("FirstName")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("first_name");
+
+                    b.Property<string>("LastName")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("last_name");
+
+                    b.Property<string>("Phone")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("phone");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("Id")
+                        .HasName("pk_customers");
+
+                    b.HasIndex("Email")
+                        .IsUnique()
+                        .HasDatabaseName("ix_customers_email");
+
+                    b.ToTable("customers", (string)null);
+                });
+
             modelBuilder.Entity("Zladovce.Domain.Identity.AdminUser", b =>
                 {
                     b.Property<Guid>("Id")
@@ -516,6 +601,9 @@ namespace Zladovce.Infrastructure.Persistence.Migrations
                     b.HasIndex("AdminUserId")
                         .HasDatabaseName("ix_inventory_movements_admin_user_id");
 
+                    b.HasIndex("OrderId")
+                        .HasDatabaseName("ix_inventory_movements_order_id");
+
                     b.HasIndex("VariantId", "CreatedAt")
                         .IsDescending(false, true)
                         .HasDatabaseName("ix_inventory_movements_variant_id_created_at");
@@ -530,6 +618,422 @@ namespace Zladovce.Infrastructure.Persistence.Migrations
 
                             t.HasCheckConstraint("ck_inventory_movements_reason", "movement_type <> 'ManualAdjustment' OR (reason IS NOT NULL AND btrim(reason) <> '')");
                         });
+                });
+
+            modelBuilder.Entity("Zladovce.Domain.Orders.Order", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<decimal?>("CollectedAmount")
+                        .HasColumnType("numeric(12,2)")
+                        .HasColumnName("collected_amount");
+
+                    b.Property<DateTimeOffset?>("CollectedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("collected_at");
+
+                    b.Property<string>("ContactEmail")
+                        .IsRequired()
+                        .HasColumnType("citext")
+                        .HasColumnName("contact_email");
+
+                    b.Property<string>("ContactFirstName")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("contact_first_name");
+
+                    b.Property<string>("ContactLastName")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("contact_last_name");
+
+                    b.Property<string>("ContactPhone")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("contact_phone");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<Guid>("CustomerId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("customer_id");
+
+                    b.Property<string>("DeliveryNote")
+                        .HasColumnType("text")
+                        .HasColumnName("delivery_note");
+
+                    b.Property<Guid>("IdempotencyKey")
+                        .HasColumnType("uuid")
+                        .HasColumnName("idempotency_key");
+
+                    b.Property<string>("OrderNumber")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("order_number");
+
+                    b.Property<string>("PaymentMethod")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("payment_method");
+
+                    b.Property<DateTimeOffset>("PlacedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("placed_at");
+
+                    b.Property<byte[]>("RequestHash")
+                        .IsRequired()
+                        .HasColumnType("bytea")
+                        .HasColumnName("request_hash");
+
+                    b.Property<Guid>("ShippingAddressId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("shipping_address_id");
+
+                    b.Property<decimal>("ShippingPrice")
+                        .HasColumnType("numeric(12,2)")
+                        .HasColumnName("shipping_price");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("status");
+
+                    b.Property<decimal>("Subtotal")
+                        .HasColumnType("numeric(12,2)")
+                        .HasColumnName("subtotal");
+
+                    b.Property<decimal>("Total")
+                        .HasColumnType("numeric(12,2)")
+                        .HasColumnName("total");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
+                    b.HasKey("Id")
+                        .HasName("pk_orders");
+
+                    b.HasIndex("ContactEmail")
+                        .HasDatabaseName("ix_orders_contact_email");
+
+                    b.HasIndex("ContactPhone")
+                        .HasDatabaseName("ix_orders_contact_phone");
+
+                    b.HasIndex("CustomerId")
+                        .HasDatabaseName("ix_orders_customer_id");
+
+                    b.HasIndex("IdempotencyKey")
+                        .IsUnique()
+                        .HasDatabaseName("ix_orders_idempotency_key");
+
+                    b.HasIndex("OrderNumber")
+                        .IsUnique()
+                        .HasDatabaseName("ix_orders_order_number");
+
+                    b.HasIndex("PlacedAt")
+                        .HasDatabaseName("ix_orders_placed_at");
+
+                    b.HasIndex("ShippingAddressId")
+                        .HasDatabaseName("ix_orders_shipping_address_id");
+
+                    b.HasIndex("Status", "PlacedAt")
+                        .IsDescending(false, true)
+                        .HasDatabaseName("ix_orders_status_placed_at");
+
+                    b.ToTable("orders", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_orders_collected", "(collected_amount IS NULL AND collected_at IS NULL) OR (collected_amount > 0 AND collected_at IS NOT NULL)");
+
+                            t.HasCheckConstraint("ck_orders_order_number", "order_number ~ '^ZLD-[0-9]{4}-[0-9]{6,}$'");
+
+                            t.HasCheckConstraint("ck_orders_payment_method", "payment_method IN ('CashOnDelivery')");
+
+                            t.HasCheckConstraint("ck_orders_request_hash", "octet_length(request_hash) = 32");
+
+                            t.HasCheckConstraint("ck_orders_shipping_price", "shipping_price >= 0");
+
+                            t.HasCheckConstraint("ck_orders_status", "status IN ('Received', 'Accepted', 'Preparing', 'Shipped', 'Delivered', 'Cancelled', 'Rejected', 'DeliveryFailed')");
+
+                            t.HasCheckConstraint("ck_orders_subtotal", "subtotal > 0");
+
+                            t.HasCheckConstraint("ck_orders_total", "total = subtotal + shipping_price");
+                        });
+                });
+
+            modelBuilder.Entity("Zladovce.Domain.Orders.OrderItem", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<decimal>("LineTotal")
+                        .HasColumnType("numeric(12,2)")
+                        .HasColumnName("line_total");
+
+                    b.Property<Guid>("OrderId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("order_id");
+
+                    b.Property<string>("ProductName")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("product_name");
+
+                    b.Property<int>("Quantity")
+                        .HasColumnType("integer")
+                        .HasColumnName("quantity");
+
+                    b.Property<string>("Sku")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("sku");
+
+                    b.Property<decimal>("UnitPrice")
+                        .HasColumnType("numeric(12,2)")
+                        .HasColumnName("unit_price");
+
+                    b.Property<Guid>("VariantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("variant_id");
+
+                    b.Property<string>("VariantName")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("variant_name");
+
+                    b.HasKey("Id")
+                        .HasName("pk_order_items");
+
+                    b.HasIndex("OrderId")
+                        .HasDatabaseName("ix_order_items_order_id");
+
+                    b.HasIndex("VariantId")
+                        .HasDatabaseName("ix_order_items_variant_id");
+
+                    b.ToTable("order_items", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_order_items_line_total", "line_total = unit_price * quantity");
+
+                            t.HasCheckConstraint("ck_order_items_quantity", "quantity > 0");
+
+                            t.HasCheckConstraint("ck_order_items_unit_price", "unit_price > 0");
+                        });
+                });
+
+            modelBuilder.Entity("Zladovce.Domain.Orders.OrderNote", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<Guid>("AdminUserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("admin_user_id");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("Note")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("note");
+
+                    b.Property<Guid>("OrderId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("order_id");
+
+                    b.HasKey("Id")
+                        .HasName("pk_order_notes");
+
+                    b.HasIndex("AdminUserId")
+                        .HasDatabaseName("ix_order_notes_admin_user_id");
+
+                    b.HasIndex("OrderId", "CreatedAt")
+                        .HasDatabaseName("ix_order_notes_order_id_created_at");
+
+                    b.ToTable("order_notes", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_order_notes_note", "btrim(note) <> ''");
+                        });
+                });
+
+            modelBuilder.Entity("Zladovce.Domain.Orders.OrderNumberCounter", b =>
+                {
+                    b.Property<int>("Year")
+                        .HasColumnType("integer")
+                        .HasColumnName("year");
+
+                    b.Property<int>("LastValue")
+                        .HasColumnType("integer")
+                        .HasColumnName("last_value");
+
+                    b.HasKey("Year")
+                        .HasName("pk_order_number_counters");
+
+                    b.ToTable("order_number_counters", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_order_number_counters_last_value", "last_value > 0");
+
+                            t.HasCheckConstraint("ck_order_number_counters_year", "year BETWEEN 2000 AND 9999");
+                        });
+                });
+
+            modelBuilder.Entity("Zladovce.Domain.Orders.OrderStatusHistoryEntry", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<Guid?>("ChangedByAdminId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("changed_by_admin_id");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("CustomerMessage")
+                        .HasColumnType("text")
+                        .HasColumnName("customer_message");
+
+                    b.Property<string>("InternalNote")
+                        .HasColumnType("text")
+                        .HasColumnName("internal_note");
+
+                    b.Property<string>("NewStatus")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("new_status");
+
+                    b.Property<Guid>("OrderId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("order_id");
+
+                    b.Property<string>("PreviousStatus")
+                        .HasColumnType("text")
+                        .HasColumnName("previous_status");
+
+                    b.HasKey("Id")
+                        .HasName("pk_order_status_history");
+
+                    b.HasIndex("ChangedByAdminId")
+                        .HasDatabaseName("ix_order_status_history_changed_by_admin_id");
+
+                    b.HasIndex("NewStatus", "CreatedAt")
+                        .HasDatabaseName("ix_order_status_history_new_status_created_at");
+
+                    b.HasIndex("OrderId", "CreatedAt")
+                        .HasDatabaseName("ix_order_status_history_order_id_created_at");
+
+                    b.ToTable("order_status_history", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_order_status_history_new_status", "new_status IN ('Received', 'Accepted', 'Preparing', 'Shipped', 'Delivered', 'Cancelled', 'Rejected', 'DeliveryFailed')");
+
+                            t.HasCheckConstraint("ck_order_status_history_previous_status", "previous_status IS NULL OR previous_status IN ('Received', 'Accepted', 'Preparing', 'Shipped', 'Delivered', 'Cancelled', 'Rejected', 'DeliveryFailed')");
+                        });
+                });
+
+            modelBuilder.Entity("Zladovce.Domain.Shipping.CourierCompany", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_active");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasColumnType("citext")
+                        .HasColumnName("name");
+
+                    b.Property<int>("SortOrder")
+                        .HasColumnType("integer")
+                        .HasColumnName("sort_order");
+
+                    b.Property<string>("TrackingUrlTemplate")
+                        .HasColumnType("text")
+                        .HasColumnName("tracking_url_template");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("Id")
+                        .HasName("pk_courier_companies");
+
+                    b.HasIndex("Name")
+                        .IsUnique()
+                        .HasDatabaseName("ix_courier_companies_name");
+
+                    b.ToTable("courier_companies", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_courier_companies_sort_order", "sort_order >= 0");
+
+                            t.HasCheckConstraint("ck_courier_companies_tracking_url_template", "tracking_url_template IS NULL OR (tracking_url_template LIKE 'https://%' AND position('{trackingNumber}' in tracking_url_template) > 0)");
+                        });
+                });
+
+            modelBuilder.Entity("Zladovce.Domain.Shipping.Shipment", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<Guid>("CourierCompanyId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("courier_company_id");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("Note")
+                        .HasColumnType("text")
+                        .HasColumnName("note");
+
+                    b.Property<Guid>("OrderId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("order_id");
+
+                    b.Property<DateTimeOffset>("ShippedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("shipped_at");
+
+                    b.Property<string>("TrackingNumber")
+                        .HasColumnType("text")
+                        .HasColumnName("tracking_number");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("Id")
+                        .HasName("pk_shipments");
+
+                    b.HasIndex("CourierCompanyId")
+                        .HasDatabaseName("ix_shipments_courier_company_id");
+
+                    b.HasIndex("OrderId")
+                        .HasDatabaseName("ix_shipments_order_id");
+
+                    b.ToTable("shipments", (string)null);
                 });
 
             modelBuilder.Entity("Zladovce.Domain.StoreSettings.StoreSettingsRecord", b =>
@@ -636,6 +1140,32 @@ namespace Zladovce.Infrastructure.Persistence.Migrations
                         });
                 });
 
+            modelBuilder.Entity("Zladovce.Infrastructure.RateLimiting.RateLimitBucket", b =>
+                {
+                    b.Property<string>("BucketKey")
+                        .HasColumnType("text")
+                        .HasColumnName("bucket_key");
+
+                    b.Property<DateTimeOffset>("WindowStart")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("window_start");
+
+                    b.Property<int>("Count")
+                        .HasColumnType("integer")
+                        .HasColumnName("count");
+
+                    b.HasKey("BucketKey", "WindowStart")
+                        .HasName("pk_rate_limit_buckets");
+
+                    b.HasIndex("WindowStart")
+                        .HasDatabaseName("ix_rate_limit_buckets_window_start");
+
+                    b.ToTable("rate_limit_buckets", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_rate_limit_buckets_count", "count > 0");
+                        });
+                });
+
             modelBuilder.Entity("Zladovce.Domain.Audit.AuditLog", b =>
                 {
                     b.HasOne("Zladovce.Domain.Identity.AdminUser", null)
@@ -675,6 +1205,16 @@ namespace Zladovce.Infrastructure.Persistence.Migrations
                         .HasConstraintName("fk_product_variants_products_product_id");
                 });
 
+            modelBuilder.Entity("Zladovce.Domain.Customers.Address", b =>
+                {
+                    b.HasOne("Zladovce.Domain.Customers.Customer", null)
+                        .WithMany()
+                        .HasForeignKey("CustomerId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_addresses_customers_customer_id");
+                });
+
             modelBuilder.Entity("Zladovce.Domain.Inventory.InventoryItem", b =>
                 {
                     b.HasOne("Zladovce.Domain.Catalog.ProductVariant", null)
@@ -693,12 +1233,102 @@ namespace Zladovce.Infrastructure.Persistence.Migrations
                         .OnDelete(DeleteBehavior.Restrict)
                         .HasConstraintName("fk_inventory_movements_admin_users_admin_user_id");
 
+                    b.HasOne("Zladovce.Domain.Orders.Order", null)
+                        .WithMany()
+                        .HasForeignKey("OrderId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_inventory_movements_orders_order_id");
+
                     b.HasOne("Zladovce.Domain.Catalog.ProductVariant", null)
                         .WithMany()
                         .HasForeignKey("VariantId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired()
                         .HasConstraintName("fk_inventory_movements_product_variants_variant_id");
+                });
+
+            modelBuilder.Entity("Zladovce.Domain.Orders.Order", b =>
+                {
+                    b.HasOne("Zladovce.Domain.Customers.Customer", null)
+                        .WithMany()
+                        .HasForeignKey("CustomerId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_orders_customers_customer_id");
+
+                    b.HasOne("Zladovce.Domain.Customers.Address", null)
+                        .WithMany()
+                        .HasForeignKey("ShippingAddressId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_orders_addresses_shipping_address_id");
+                });
+
+            modelBuilder.Entity("Zladovce.Domain.Orders.OrderItem", b =>
+                {
+                    b.HasOne("Zladovce.Domain.Orders.Order", null)
+                        .WithMany("Items")
+                        .HasForeignKey("OrderId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_order_items_orders_order_id");
+
+                    b.HasOne("Zladovce.Domain.Catalog.ProductVariant", null)
+                        .WithMany()
+                        .HasForeignKey("VariantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_order_items_product_variants_variant_id");
+                });
+
+            modelBuilder.Entity("Zladovce.Domain.Orders.OrderNote", b =>
+                {
+                    b.HasOne("Zladovce.Domain.Identity.AdminUser", null)
+                        .WithMany()
+                        .HasForeignKey("AdminUserId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_order_notes_admin_users_admin_user_id");
+
+                    b.HasOne("Zladovce.Domain.Orders.Order", null)
+                        .WithMany()
+                        .HasForeignKey("OrderId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_order_notes_orders_order_id");
+                });
+
+            modelBuilder.Entity("Zladovce.Domain.Orders.OrderStatusHistoryEntry", b =>
+                {
+                    b.HasOne("Zladovce.Domain.Identity.AdminUser", null)
+                        .WithMany()
+                        .HasForeignKey("ChangedByAdminId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_order_status_history_admin_users_changed_by_admin_id");
+
+                    b.HasOne("Zladovce.Domain.Orders.Order", null)
+                        .WithMany()
+                        .HasForeignKey("OrderId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_order_status_history_orders_order_id");
+                });
+
+            modelBuilder.Entity("Zladovce.Domain.Shipping.Shipment", b =>
+                {
+                    b.HasOne("Zladovce.Domain.Shipping.CourierCompany", null)
+                        .WithMany()
+                        .HasForeignKey("CourierCompanyId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_shipments_courier_companies_courier_company_id");
+
+                    b.HasOne("Zladovce.Domain.Orders.Order", null)
+                        .WithMany()
+                        .HasForeignKey("OrderId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_shipments_orders_order_id");
                 });
 
             modelBuilder.Entity("Zladovce.Domain.StoreSettings.StoreSettingsRecord", b =>
@@ -715,6 +1345,11 @@ namespace Zladovce.Infrastructure.Persistence.Migrations
                     b.Navigation("Images");
 
                     b.Navigation("Variants");
+                });
+
+            modelBuilder.Entity("Zladovce.Domain.Orders.Order", b =>
+                {
+                    b.Navigation("Items");
                 });
 #pragma warning restore 612, 618
         }

@@ -1,4 +1,6 @@
 using System.Text.Json.Serialization;
+using Zladovce.Application.Cart;
+using Zladovce.Domain.Orders;
 
 namespace Zladovce.Api.Errors;
 
@@ -32,6 +34,17 @@ public sealed record ApiProblem
     /// </summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public IReadOnlyDictionary<string, string[]>? Errors { get; init; }
+
+    /// <summary>
+    /// Checkout conflicts only (409 <c>CART_CHANGED</c>, <c>INSUFFICIENT_STOCK</c>, <c>MINIMUM_ORDER_NOT_MET</c>,
+    /// <c>SHIPPING_DISABLED</c>): the cart priced again now, in the shape of <c>POST /api/v1/cart/quote</c>.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public CartQuoteResponse? Quote { get; init; }
+
+    /// <summary>409 <c>INVALID_STATUS_TRANSITION</c> only: the statuses the order can move to now (empty for a final status).</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<OrderStatus>? AllowedNextStatuses { get; init; }
 
     /// <summary>Identifier to quote when reporting the problem.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]

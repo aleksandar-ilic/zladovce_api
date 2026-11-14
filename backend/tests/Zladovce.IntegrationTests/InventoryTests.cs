@@ -203,16 +203,21 @@ public class InventoryTests : IDisposable
         const int stock = 7;
         const int attempts = 25;
         var (_, variantId, _) = await CreateStockedAsync(stock);
+        var orderIds = new List<Guid>();
+        for (var i = 0; i < attempts; i++)
+        {
+            orderIds.Add(await _postgres.InsertPlaceholderOrderAsync());
+        }
 
         using var start = new ManualResetEventSlim(false);
-        var tasks = Enumerable.Range(0, attempts).Select(_ => Task.Run(async () =>
+        var tasks = orderIds.Select(orderId => Task.Run(async () =>
         {
             await using var scope = _factory.Services.CreateAsyncScope();
             var inventory = scope.ServiceProvider.GetRequiredService<IInventoryService>();
             start.Wait();
             try
             {
-                await inventory.DeductAsync([new StockLine(variantId, 1)], Guid.CreateVersion7(), CancellationToken.None);
+                await inventory.DeductAsync([new StockLine(variantId, 1)], orderId, CancellationToken.None);
                 return true;
             }
             catch (InsufficientStockException)
@@ -241,7 +246,7 @@ public class InventoryTests : IDisposable
     {
         var (first, firstVariant, _) = await CreateStockedAsync(5);
         var (_, secondVariant, _) = await CreateStockedAsync(1);
-        var orderId = Guid.CreateVersion7();
+        var orderId = await _postgres.InsertPlaceholderOrderAsync();
 
         await using (var scope = _factory.Services.CreateAsyncScope())
         {

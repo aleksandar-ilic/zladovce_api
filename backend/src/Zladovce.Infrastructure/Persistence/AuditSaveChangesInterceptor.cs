@@ -8,6 +8,8 @@ using Zladovce.Domain.Audit;
 using Zladovce.Domain.Catalog;
 using Zladovce.Domain.Categories;
 using Zladovce.Domain.Inventory;
+using Zladovce.Domain.Shipping;
+using Zladovce.Domain.StoreSettings;
 
 namespace Zladovce.Infrastructure.Persistence;
 
@@ -28,10 +30,13 @@ public sealed class AuditSaveChangesInterceptor(IRequestContext requestContext, 
         [typeof(ProductVariant)] = "ProductVariant",
         [typeof(ProductImage)] = "ProductImage",
         [typeof(InventoryItem)] = "Inventory",
+        [typeof(CourierCompany)] = "CourierCompany",
+        [typeof(Shipment)] = "Shipment",
+        [typeof(StoreSettingsRecord)] = "StoreSettings",
     };
 
     /// <summary>Bookkeeping columns that say nothing about what the administrator changed.</summary>
-    private static readonly HashSet<string> IgnoredProperties = ["UpdatedAt", "CreatedAt", "Version"];
+    private static readonly HashSet<string> IgnoredProperties = ["UpdatedAt", "CreatedAt", "Version", "UpdatedByAdminId"];
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {

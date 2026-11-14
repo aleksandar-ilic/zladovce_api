@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
 using Zladovce.Application.Common.Errors;
+using Zladovce.Application.Orders;
 using Zladovce.Domain.Common;
 
 namespace Zladovce.Api.Errors;
@@ -16,6 +17,10 @@ public static class ProblemMapper
         ForbiddenException e => ApiProblem.Create(StatusCodes.Status403Forbidden, e.Code, e.Title, e.Detail),
         BadRequestException e => ApiProblem.Create(StatusCodes.Status400BadRequest, e.Code, e.Title, e.Detail),
         InsufficientStockException e => ApiProblem.Create(StatusCodes.Status409Conflict, e.Code, e.Title, e.Detail),
+        CheckoutConflictException e => ApiProblem.Create(StatusCodes.Status409Conflict, e.Code, e.Title, e.Detail, e.Errors) with { Quote = e.Quote },
+        InvalidStatusTransitionException e =>
+            ApiProblem.Create(StatusCodes.Status409Conflict, e.Code, e.Title, e.Detail) with { AllowedNextStatuses = e.AllowedNextStatuses },
+        RateLimitedException => FromStatusCode(StatusCodes.Status429TooManyRequests),
 
         // A domain invariant refused the data. The developer message is logged, not returned.
         DomainException => ApiProblem.Create(
@@ -52,6 +57,9 @@ public static class ProblemMapper
         "ix_products_sku" or "ix_product_variants_sku" =>
             ApiProblem.Create(StatusCodes.Status409Conflict, ErrorCodes.SkuTaken, ErrorTexts.SkuTakenTitle, ErrorTexts.SkuTakenDetail,
                 FieldError("sku", ErrorTexts.SkuTakenDetail)),
+        "ix_courier_companies_name" =>
+            ApiProblem.Create(StatusCodes.Status409Conflict, ErrorCodes.CourierNameTaken, ErrorTexts.CourierNameTakenTitle, ErrorTexts.CourierNameTakenDetail,
+                FieldError("name", ErrorTexts.CourierNameTakenDetail)),
         "pk_product_images" =>
             ApiProblem.Create(StatusCodes.Status409Conflict, ErrorCodes.ImageAlreadyAttached, ErrorTexts.ImageAlreadyAttachedTitle, ErrorTexts.ImageAlreadyAttachedDetail),
         _ => FromStatusCode(StatusCodes.Status409Conflict),

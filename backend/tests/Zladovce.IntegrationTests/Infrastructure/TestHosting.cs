@@ -77,6 +77,34 @@ public sealed class PostgresFixture : IAsyncLifetime
         return result is null or DBNull ? default : (T)result;
     }
 
+    /// <summary>
+    /// Inserts a minimal order (with its customer and address) directly, for tests of other modules that need a real order id
+    /// (stock movements reference orders). Numbers use the year 2000, which checkout never produces.
+    /// </summary>
+    public async Task<Guid> InsertPlaceholderOrderAsync()
+    {
+        var customer = Guid.CreateVersion7();
+        var address = Guid.CreateVersion7();
+        var order = Guid.CreateVersion7();
+        var email = $"placeholder-{order:N}@example.com";
+        await ExecuteAsync(
+            "INSERT INTO customers (id, email, first_name, last_name, phone, created_at, updated_at) VALUES (@c, @e, 'Test', 'Kupac', '+381641234567', now(), now())",
+            ("c", customer), ("e", email));
+        await ExecuteAsync(
+            "INSERT INTO addresses (id, customer_id, city, street, postal_code, created_at) VALUES (@a, @c, 'Beograd', 'Ulica 1', '11000', now())",
+            ("a", address), ("c", customer));
+        await ExecuteAsync(
+            """
+            INSERT INTO orders (id, order_number, idempotency_key, request_hash, customer_id, shipping_address_id, status,
+                contact_first_name, contact_last_name, contact_email, contact_phone, payment_method, subtotal, shipping_price, total,
+                placed_at, created_at, updated_at)
+            VALUES (@o, @n, @k, @h, @c, @a, 'Received', 'Test', 'Kupac', @e, '+381641234567', 'CashOnDelivery', 100, 0, 100, now(), now(), now())
+            """,
+            ("o", order), ("n", $"ZLD-2000-{Random.Shared.NextInt64(100_000_000, 999_999_999)}"), ("k", Guid.NewGuid()),
+            ("h", RandomNumberGenerator.GetBytes(32)), ("c", customer), ("a", address), ("e", email));
+        return order;
+    }
+
     public async Task<int> ExecuteAsync(string sql, params (string Name, object Value)[] parameters)
     {
         await using var connection = new NpgsqlConnection(ConnectionString);
@@ -186,6 +214,9 @@ public sealed class DevApiFactory() : ApiFactory("Development")
         ["Auth:DevBypass"] = "true",
         ["Cors:AllowedOrigins:0"] = "http://localhost:4200",
         ["Cors:AllowedOrigins:1"] = "http://localhost:4201",
+
+        // Tests are not throttled unless they are about rate limiting (they switch it back on through ExtraSettings).
+        ["RateLimiting:Enabled"] = "false",
     };
 }
 

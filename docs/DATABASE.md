@@ -255,6 +255,7 @@ Indexes: `(is_active, is_featured)`, trigram index on `unaccent(name)` for searc
 | id | uuid PK | |
 | order_number | text | unique, `ZLD-YYYY-000001` |
 | idempotency_key | uuid | unique |
+| request_hash | bytea | hash of the checkout request; a reused key with a different body is refused (added in Phase 5) |
 | customer_id | uuid FK → customers | index |
 | shipping_address_id | uuid FK → addresses | |
 | status | text | 8 statuses, check constraint |
@@ -306,6 +307,16 @@ Indexes: `(status, placed_at desc)`, `(placed_at)`, `(contact_email)`, `(contact
 | created_at | timestamptz | |
 | revoked_at | timestamptz null | |
 | last_used_at | timestamptz null | |
+
+**order_notes** – append-only internal notes added without a status change (added in Phase 5, so `order_status_history` keeps exactly one row per transition).
+
+| Column | Type | Notes |
+|---|---|---|
+| id | uuid PK | |
+| order_id | uuid FK → orders | index |
+| admin_user_id | uuid FK → admin_users | |
+| note | text | 1–2000 characters, never public |
+| created_at | timestamptz | |
 
 **order_number_counters**
 

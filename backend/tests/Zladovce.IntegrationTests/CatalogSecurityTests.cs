@@ -157,7 +157,7 @@ public class RoleBootstrapTests(PostgresFixture postgres)
 
         var migrate = await new MigrationRunner(Configuration(new() { ["Database:ConnectionString"] = asMigrator }))
             .HandleAsync(new MigrationRequest(), new FakeLambdaContext());
-        Assert.Equal(2, migrate.AppliedMigrations.Count);
+        Assert.Equal(3, migrate.AppliedMigrations.Count);
 
         await using (var connection = new NpgsqlConnection(databaseUrl))
         {

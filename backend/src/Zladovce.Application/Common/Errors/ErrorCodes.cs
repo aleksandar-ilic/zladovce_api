@@ -38,6 +38,17 @@ public static class ErrorCodes
     public const string ImageNotReady = "IMAGE_NOT_READY";
     public const string ImageAlreadyAttached = "IMAGE_ALREADY_ATTACHED";
     public const string ImageLimitReached = "IMAGE_LIMIT_REACHED";
+
+    // Checkout and orders
+    public const string IdempotencyKeyReused = "IDEMPOTENCY_KEY_REUSED";
+    public const string CartChanged = "CART_CHANGED";
+    public const string MinimumOrderNotMet = "MINIMUM_ORDER_NOT_MET";
+    public const string ShippingDisabled = "SHIPPING_DISABLED";
+    public const string InvalidStatusTransition = "INVALID_STATUS_TRANSITION";
+    public const string OrderNotDelivered = "ORDER_NOT_DELIVERED";
+
+    // Shipping
+    public const string CourierNameTaken = "COURIER_NAME_TAKEN";
 }
 
 /// <summary>Default Serbian (Latin) texts for the generic error codes.</summary>
@@ -129,4 +140,27 @@ public static class ErrorTexts
 
     public const string ImageLimitReachedTitle = "Previše slika";
     public const string ImageLimitReachedDetail = "Proizvod već ima najveći dozvoljeni broj slika.";
+
+    public const string IdempotencyKeyReusedTitle = "Zahtev je već iskorišćen";
+    public const string IdempotencyKeyReusedDetail = "Ovaj ključ porudžbine je već iskorišćen za drugačiju porudžbinu. Osvežite stranicu i pokušajte ponovo.";
+
+    public const string CartChangedTitle = "Korpa je promenjena";
+    public const string CartChangedDetail = "Cene ili dostupnost proizvoda u korpi su se promenile. Proverite korpu i potvrdite porudžbinu ponovo.";
+
+    public const string CheckoutInsufficientStockDetail = "Nekih proizvoda više nema u traženoj količini. Proverite korpu i potvrdite porudžbinu ponovo.";
+
+    public const string MinimumOrderNotMetTitle = "Minimalni iznos porudžbine nije dostignut";
+    public const string MinimumOrderNotMetDetail = "Iznos porudžbine je manji od minimalnog. Dodajte još proizvoda u korpu.";
+
+    public const string ShippingDisabledTitle = "Poručivanje trenutno nije moguće";
+    public const string ShippingDisabledDetail = "Dostava je trenutno isključena, pa porudžbine nije moguće primiti. Pokušajte ponovo kasnije.";
+
+    public const string InvalidStatusTransitionTitle = "Promena statusa nije dozvoljena";
+    public const string InvalidStatusTransitionDetail = "Porudžbina ne može da pređe iz trenutnog u traženi status.";
+
+    public const string OrderNotDeliveredTitle = "Porudžbina nije isporučena";
+    public const string OrderNotDeliveredDetail = "Naplata se evidentira samo za isporučene porudžbine.";
+
+    public const string CourierNameTakenTitle = "Naziv je zauzet";
+    public const string CourierNameTakenDetail = "Kurirska služba sa ovim nazivom već postoji.";
 }

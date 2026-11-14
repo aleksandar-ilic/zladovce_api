@@ -14,6 +14,7 @@ using Zladovce.Infrastructure.Database;
 using Zladovce.Infrastructure.Identity;
 using Zladovce.Infrastructure.Media;
 using Zladovce.Infrastructure.Persistence;
+using Zladovce.Infrastructure.RateLimiting;
 
 namespace Zladovce.Infrastructure;
 
@@ -69,6 +70,9 @@ public static class InfrastructureServices
         services.AddPersistence(configuration);
         services.AddMediaStorage(configuration);
         services.Configure<CatalogOptions>(configuration.GetSection(CatalogOptions.SectionName));
+        services.Configure<RateLimitingOptions>(configuration.GetSection(RateLimitingOptions.SectionName));
+        services.AddSingleton<IRateLimiter, PostgresRateLimiter>();
+        services.AddScoped<Application.Orders.ICheckoutStore, CheckoutStore>();
 
         services.Configure<CognitoOptions>(configuration.GetSection(CognitoOptions.SectionName));
         services.AddSingleton<IAdminProfileLookup, CognitoAdminProfileLookup>();

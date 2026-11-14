@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore.Metadata.Builders;
 using Zladovce.Domain.Catalog;
 using Zladovce.Domain.Identity;
 using Zladovce.Domain.Inventory;
+using Zladovce.Domain.Orders;
 
 namespace Zladovce.Infrastructure.Persistence.Configurations;
 
@@ -63,8 +64,11 @@ internal sealed class InventoryMovementConfiguration : IEntityTypeConfiguration<
         builder.Property(m => m.QuantityAfter).IsRequired();
         builder.Property(m => m.Reason).HasColumnType("text");
 
-        // Plain column for now: the orders table (Phase 5) adds the foreign key and its index.
-        builder.Property(m => m.OrderId);
+        builder.HasOne<Order>()
+            .WithMany()
+            .HasForeignKey(m => m.OrderId)
+            .OnDelete(DeleteBehavior.Restrict);
+        builder.HasIndex(m => m.OrderId);
 
         builder.HasOne<AdminUser>()
             .WithMany()

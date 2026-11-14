@@ -3,7 +3,9 @@ using Microsoft.AspNetCore.Mvc;
 using Zladovce.Application.Catalog;
 using Zladovce.Application.Common;
 using Zladovce.Application.Inventory;
+using Zladovce.Application.Orders;
 using Zladovce.Domain.Inventory;
+using Zladovce.Domain.Orders;
 
 namespace Zladovce.Api.Endpoints;
 
@@ -99,7 +101,7 @@ public sealed class PublicProductListQuery
 
     /// <summary>
     /// <c>newest</c> (default), <c>priceAsc</c>, <c>priceDesc</c>, <c>name</c>, <c>bestselling</c>.
-    /// <c>bestselling</c> is ordered like <c>newest</c> until orders exist.
+    /// <c>bestselling</c>: pieces sold in orders delivered in the last 90 days (configurable), ties newest first.
     /// </summary>
     [FromQuery(Name = "sort")]
     public string? Sort { get; set; }
@@ -212,4 +214,78 @@ public sealed class PageQuery
 public sealed class PageQueryValidator : AbstractValidator<PageQuery>
 {
     public PageQueryValidator() => this.PagingRules(q => q.Page, q => q.PageSize);
+}
+
+/// <summary>Query of <c>GET /api/v1/admin/orders</c>.</summary>
+public sealed class AdminOrderListQuery
+{
+    public static readonly string[] SortValues = ["newest", "oldest", "totalDesc", "totalAsc"];
+
+    /// <summary>
+    /// Search in order number, customer first and last name (ignores case and Serbian diacritics), email and phone
+    /// ("064 123", "+381 64 123" and "64123" all find +381641234567).
+    /// </summary>
+    [FromQuery(Name = "q")]
+    public string? Q { get; set; }
+
+    /// <summary>
+    /// <c>Received</c>, <c>Accepted</c>, <c>Preparing</c>, <c>Shipped</c>, <c>Delivered</c>, <c>Cancelled</c>, <c>Rejected</c>,
+    /// <c>DeliveryFailed</c>; several values comma-separated and/or repeated match any of them; omitted = all.
+    /// </summary>
+    [FromQuery(Name = "status")]
+    public string[]? Status { get; set; }
+
+    /// <summary>First day placed (yyyy-MM-dd, Serbian local date), inclusive.</summary>
+    [FromQuery(Name = "from")]
+    public DateOnly? From { get; set; }
+
+    /// <summary>Last day placed (yyyy-MM-dd, Serbian local date), inclusive.</summary>
+    [FromQuery(Name = "to")]
+    public DateOnly? To { get; set; }
+
+    /// <summary><c>newest</c> (default), <c>oldest</c>, <c>totalDesc</c>, <c>totalAsc</c>.</summary>
+    [FromQuery(Name = "sort")]
+    public string? Sort { get; set; }
+
+    [FromQuery(Name = "page")]
+    public int? Page { get; set; }
+
+    [FromQuery(Name = "pageSize")]
+    public int? PageSize { get; set; }
+
+    public IEnumerable<string> StatusValuesRequested() =>
+        (Status ?? []).SelectMany(v => (v ?? string.Empty).Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+
+    public AdminOrderListCriteria ToCriteria() => new(
+        Q,
+        StatusValuesRequested().Select(Enum.Parse<OrderStatus>).ToHashSet(),
+        From,
+        To,
+        Sort switch
+        {
+            "oldest" => AdminOrderSort.Oldest,
+            "totalDesc" => AdminOrderSort.TotalDescending,
+            "totalAsc" => AdminOrderSort.TotalAscending,
+            _ => AdminOrderSort.Newest,
+        },
+        PageRequest.From(Page, PageSize));
+}
+
+public sealed class AdminOrderListQueryValidator : AbstractValidator<AdminOrderListQuery>
+{
+    private static readonly string[] Statuses = Enum.GetNames<OrderStatus>();
+
+    public AdminOrderListQueryValidator()
+    {
+        RuleFor(q => q.Q).MaximumLength(ValidationRules.MaxSearchLength);
+        RuleFor(q => q.StatusValuesRequested())
+            .Must(values => values.All(value => Statuses.Contains(value, StringComparer.Ordinal)))
+            .OverridePropertyName("status")
+            .WithMessage($"Dozvoljene vrednosti: {string.Join(", ", Statuses)}.");
+        RuleFor(q => q.To)
+            .Must((query, to) => to is null || query.From is null || to >= query.From)
+            .WithMessage("Datum „do” ne može biti pre datuma „od”.");
+        RuleFor(q => q.Sort).OneOf(AdminOrderListQuery.SortValues);
+        this.PagingRules(q => q.Page, q => q.PageSize);
+    }
 }

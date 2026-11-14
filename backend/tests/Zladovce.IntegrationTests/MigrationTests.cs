@@ -14,17 +14,18 @@ public class MigrationTests(PostgresFixture postgres)
         var first = await PostgresFixture.RunMigrationsAsync(connectionString);
         var second = await PostgresFixture.RunMigrationsAsync(connectionString);
 
-        Assert.Equal(2, first.AppliedMigrations.Count);
+        Assert.Equal(3, first.AppliedMigrations.Count);
         Assert.EndsWith("_InitialFoundation", first.AppliedMigrations[0]);
         Assert.EndsWith("_CatalogAndInventory", first.AppliedMigrations[1]);
-        Assert.Equal(first.AppliedMigrations[1], first.CurrentMigration);
+        Assert.EndsWith("_CheckoutAndOrders", first.AppliedMigrations[2]);
+        Assert.Equal(first.AppliedMigrations[2], first.CurrentMigration);
 
         Assert.Empty(second.AppliedMigrations);
         Assert.Equal(first.CurrentMigration, second.CurrentMigration);
     }
 
     [Fact]
-    public async Task Schema_has_exactly_the_foundation_and_catalog_tables()
+    public async Task Schema_has_exactly_the_foundation_catalog_and_order_tables()
     {
         var tables = await postgres.ScalarAsync<string[]>(
             """
@@ -34,7 +35,11 @@ public class MigrationTests(PostgresFixture postgres)
             """);
 
         Assert.Equal(
-            ["admin_users", "audit_logs", "categories", "inventory", "inventory_movements", "product_images", "product_variants", "products", "store_settings"],
+            [
+                "addresses", "admin_users", "audit_logs", "categories", "courier_companies", "customers", "inventory", "inventory_movements",
+                "order_items", "order_notes", "order_number_counters", "order_status_history", "orders", "product_images", "product_variants",
+                "products", "rate_limit_buckets", "shipments", "store_settings",
+            ],
             tables!);
     }
 

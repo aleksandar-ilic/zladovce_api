@@ -12,6 +12,7 @@ using Zladovce.Api.Endpoints;
 using Zladovce.Api.Errors;
 using Zladovce.Api.Logging;
 using Zladovce.Api.OpenApi;
+using Zladovce.Api.RateLimiting;
 using Zladovce.Api.Validation;
 using Zladovce.Application;
 using Zladovce.Application.Common;
@@ -67,6 +68,7 @@ public static class ApiHost
         builder.Services.AddValidatorsFromAssembly(typeof(ApiHost).Assembly, includeInternalTypes: false);
 
         builder.Services.Configure<AuthOptions>(configuration.GetSection(AuthOptions.SectionName));
+        builder.Services.Configure<ClientIpOptions>(configuration.GetSection(ClientIpOptions.SectionName));
         builder.Services.AddZladovceAuth(environment, auth, cognito);
 
         builder.Services.ConfigureHttpJsonOptions(options =>
@@ -100,7 +102,7 @@ public static class ApiHost
             policy.WithOrigins(corsOrigins)
                 .WithMethods("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS")
                 .WithHeaders([.. headers])
-                .WithExposedHeaders(CorrelationIdMiddleware.HeaderName)
+                .WithExposedHeaders(CorrelationIdMiddleware.HeaderName, "Retry-After")
                 .SetPreflightMaxAge(TimeSpan.FromMinutes(10));
         }));
 
@@ -126,6 +128,7 @@ public static class ApiHost
         app.UseCors(CorsPolicy);
         app.UseAuthentication();
         app.UseAuthorization();
+        app.UseMiddleware<PostgresRateLimitingMiddleware>();
 
         if (app.Environment.IsDevelopment())
         {

@@ -9,7 +9,10 @@ public static class ProblemWriter
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
-        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+        // Optional members of ApiProblem are skipped through their own attributes; nested payloads (the fresh quote of a
+        // checkout conflict) keep their nulls, exactly like the normal responses of the same shape.
+        DefaultIgnoreCondition = JsonIgnoreCondition.Never,
+        Converters = { new JsonStringEnumConverter() },
         // Serbian letters are written as-is; the body is JSON, never HTML.
         Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
     };
@@ -60,6 +63,11 @@ public sealed class ExceptionHandlingMiddleware(RequestDelegate next, ILogger<Ex
             }
 
             context.Response.Clear();
+            if (exception is Application.Common.Errors.RateLimitedException limited)
+            {
+                context.Response.Headers.RetryAfter = limited.RetryAfterSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            }
+
             await ProblemWriter.WriteAsync(context, problem);
         }
     }

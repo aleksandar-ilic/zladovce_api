@@ -24,6 +24,7 @@ public static class EndpointMapping
         api.MapStoreEndpoints();
         api.MapPublicCatalogEndpoints();
         api.MapStorefrontEndpoints();
+        api.MapCheckoutEndpoints();
 
         var admin = api.MapGroup("/admin")
             .RequireAuthorization(AuthPolicies.AdminAny)
@@ -34,6 +35,8 @@ public static class EndpointMapping
         admin.MapAdminSessionEndpoints();
         admin.MapAdminCatalogEndpoints();
         admin.MapAdminInventoryEndpoints();
+        admin.MapAdminOrderEndpoints();
+        admin.MapAdminShippingEndpoints();
 
         return app;
     }

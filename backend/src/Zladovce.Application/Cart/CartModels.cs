@@ -105,6 +105,18 @@ public enum CartAdjustmentReason
     PriceChanged,
 }
 
+/// <summary>Why a <c>quantityReduced</c> line was capped.</summary>
+public enum QuantityLimitReason
+{
+    /// <summary>Not enough on stock: the line was reduced to what can be sold now (below the per-order cap).</summary>
+    [JsonStringEnumMemberName("stock")]
+    Stock,
+
+    /// <summary>The per-order cap of one variant (<c>Catalog:MaxOrderQuantity</c>, default 20) limits the line; stock would allow more.</summary>
+    [JsonStringEnumMemberName("orderLimit")]
+    OrderLimit,
+}
+
 /// <summary>A priced cart line.</summary>
 /// <param name="Image">Main image of the product, when it has one.</param>
 /// <param name="UnitPrice">Price per piece the customer pays (RSD): the discount price when there is one, otherwise the regular price.</param>
@@ -138,13 +150,18 @@ public sealed record CartQuoteLine(
 /// <param name="AvailableQuantity">Quantity in the quote: 0 for <c>unavailable</c>, <c>maxOrderQuantity</c> for <c>quantityReduced</c>, the line quantity for <c>priceChanged</c>.</param>
 /// <param name="PreviousUnitPrice"><c>priceChanged</c> only: the <c>knownUnitPrice</c> that was sent; otherwise null.</param>
 /// <param name="UnitPrice"><c>priceChanged</c> only: the current unit price; otherwise null.</param>
+/// <param name="LimitReason">
+/// <c>quantityReduced</c> only: <c>stock</c> (less on stock than the per-order cap) or <c>orderLimit</c> (the per-order cap
+/// applies); otherwise null.
+/// </param>
 public sealed record CartQuoteAdjustment(
     Guid VariantId,
     CartAdjustmentReason Reason,
     int RequestedQuantity,
     int AvailableQuantity,
     decimal? PreviousUnitPrice,
-    decimal? UnitPrice);
+    decimal? UnitPrice,
+    QuantityLimitReason? LimitReason = null);
 
 /// <summary>Shipping of the quoted cart.</summary>
 /// <param name="Enabled">False when the store currently does not ship: nothing can be ordered (<c>canCheckout</c> is false).</param>

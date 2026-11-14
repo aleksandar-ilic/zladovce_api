@@ -16,6 +16,11 @@ processor Lambda), MinIO for local development, and the database role bootstrap 
 Phase 4 (Storefront, backend part) adds the public cart quote (`POST /api/v1/cart/quote`, `ICartPricingService`, which
 Phase 5 checkout reuses) and the SEO routes for prerendering and the sitemap (`GET /api/v1/seo/routes`). No migration.
 
+Phase 5 (Checkout and orders, backend part) adds migration `CheckoutAndOrders`, idempotent checkout (`POST /api/v1/orders`),
+the order status state machine with stock returns, order administration (list, detail, status, notes, shipments, collected
+payment, per-status summary), couriers, store settings administration, bestsellers, `limitReason` in the cart quote and a
+PostgreSQL-backed rate limiter.
+
 ## Layout
 
 ```
@@ -39,7 +44,7 @@ backend/
 ```
 
 Dependency rule: `Domain` ← `Application` ← `Infrastructure` ← `Api` / `Lambda`. Each project is organised by
-module folder (`Identity`, `StoreSettings`, `Audit`, `Categories`, `Catalog`, `Inventory`, `Media`, `Cart`, `Seo`, `Common`).
+module folder (`Identity`, `StoreSettings`, `Audit`, `Categories`, `Catalog`, `Inventory`, `Media`, `Cart`, `Seo`, `Orders`, `Shipping`, `Customers`, `Common`).
 
 ## Prerequisites
 
@@ -113,7 +118,8 @@ the request):
 
 Generic codes: `VALIDATION_FAILED`, `BAD_REQUEST`, `UNAUTHORIZED`, `FORBIDDEN`, `ADMIN_INACTIVE`,
 `ADMIN_NOT_PROVISIONED`, `NOT_FOUND`, `METHOD_NOT_ALLOWED`, `CONFLICT`, `CONCURRENT_EDIT`, `RATE_LIMITED`,
-`INTERNAL_ERROR`, `SERVICE_UNAVAILABLE`. Application code throws `RequestValidationException`,
+`INTERNAL_ERROR`, `SERVICE_UNAVAILABLE` (Phase 5 codes: see "Endpoints (Phase 5)"). Checkout conflicts add `quote`
+(the fresh cart quote) and `INVALID_STATUS_TRANSITION` adds `allowedNextStatuses` to the problem body. Application code throws `RequestValidationException`,
 `NotFoundException`, `ConflictException` or `ForbiddenException` (`Zladovce.Application.Common.Errors`);
 one middleware turns them into responses.
 
@@ -170,8 +176,7 @@ Catalog rules:
 - The shop shows a product only when it is active, not archived, in an active (and not archived) category and has
   at least one active variant. Exact stock is never published: variants expose `inStock` and
   `maxOrderQuantity = min(stock, Catalog:MaxOrderQuantity)` (default 20).
-- Sort `bestselling` is accepted but ordered like `newest` until orders exist (Phase 5). There is no
-  `/catalog/bestsellers` endpoint yet.
+- Sort `bestselling` orders by pieces sold in delivered orders (Phase 5, see "Bestsellers").
 - Search (`q`) ignores case and Serbian diacritics ("dzem" finds "Džem"): `lower(zladovce_unaccent(...)) LIKE`,
   where `zladovce_unaccent` is an IMMUTABLE wrapper around `unaccent` so that `products.name` can have a trigram index.
 - Slugs are generated from the name when not given (č, ć → c, š → s, ž → z, đ → dj) and get `-2`, `-3`, … when
@@ -193,8 +198,7 @@ Inventory:
   and returns rows in any of them; one value works as before. "Low stock" on the dashboard (`GET dashboard/low-stock`)
   is exactly `low` + `out` and uses the same filter, so **the dashboard card should link to the inventory list with
   `status=low,out`** – its `totalItems` equals the card's `totalItems`.
-- `inventory_movements.order_id` is a plain nullable `uuid` **without a foreign key** for now; the orders table and the
-  foreign key arrive in Phase 5.
+- `inventory_movements.order_id` references `orders` (foreign key added in Phase 5).
 
 Audit: an EF Core `SaveChanges` interceptor writes one `audit_logs` row per created/updated/archived/restored/
 deleted category, product, variant, product image and inventory record (`{Entity}.{Created|Updated|Archived|Restored|Deleted}`,
@@ -250,10 +254,10 @@ a quantity sent as a string), as everywhere else in the API.
 
 `ICartPricingService.QuoteAsync(items)` (Application, no HTTP types) does one query for all requested variants (product,
 category check, main image, stock) plus one for the store settings, and joins the caller's transaction. Phase 5
-checkout calls it inside the order transaction and then deducts stock with `IInventoryService`. Not rate limited yet
-(Phase 5/8).
+checkout calls it inside the order transaction and then deducts stock with `IInventoryService`. Not rate limited
+(API Gateway throttling only).
 
-CORS: the storefront origin (`http://localhost:4200` in development) is in `Cors:AllowedOrigins`; the policy allows
+CORS: the storefront origins (`http://localhost:4200` and `http://localhost:4210` in development) is in `Cors:AllowedOrigins`; the policy allows
 `POST` and the `Content-Type` header, so the JSON preflight succeeds (integration-tested).
 
 ### SEO routes
@@ -262,6 +266,114 @@ Visibility is the public catalog's (`CatalogVisibility`): active, not archived c
 page exists) and visible products. `updatedAt` is the category's/product's `updated_at` (product edits, variant and
 image changes touch it; stock changes do not). Blog posts and blog categories are added in Phase 7 as new members of
 the same response (`{ slug, updatedAt }`); there are no placeholder entries.
+
+## Endpoints (Phase 5 – checkout and orders)
+
+Migration `CheckoutAndOrders`: `customers`, `addresses` (immutable), `orders`, `order_items`, `order_status_history`
+(append-only), `order_notes` (append-only), `order_number_counters`, `courier_companies`, `shipments`, `rate_limit_buckets`,
+and the foreign key `inventory_movements.order_id → orders` deferred by Phase 3. Indexes as in DATABASE.md
+(`orders (status, placed_at desc)`, `(placed_at)`, `(contact_email)`, `(contact_phone)`, unique `order_number` and
+`idempotency_key`, `order_status_history (order_id, created_at)` and `(new_status, created_at)` for "delivered in a period").
+Check constraints: `total = subtotal + shipping_price`, `line_total = unit_price * quantity`, status lists, order-number
+format, postal code `^[0-9]{5}$`, collected amount and date both set or both null, tracking URL template https with
+`{trackingNumber}`. `orders.request_hash` (bytea, SHA-256) is an addition to DATABASE.md, needed for idempotency.
+
+| Method | Path | Auth | Purpose |
+|---|---|---|---|
+| POST | `/api/v1/orders` | – (rate limited) | Checkout. Header `Idempotency-Key: <uuid>` required |
+| GET | `/api/v1/catalog/bestsellers?limit=` | – | Best sellers from Delivered orders (1–24, default 8) |
+| GET | `/api/v1/admin/orders` | AdminAny | `q`, `status` (multi), `from`, `to` (Serbian dates), `sort` = `newest`, `oldest`, `totalDesc`, `totalAsc`, paging |
+| GET | `/api/v1/admin/orders/summary` | AdminAny | Count per status (all eight) and total |
+| GET | `/api/v1/admin/orders/{id}` | AdminAny | Detail with timeline, notes, shipments, payment, `allowedNextStatuses` |
+| POST | `/api/v1/admin/orders/{id}/status` | AdminAny | `newStatus`, `version`, `internalNote?`, `customerMessage?`, `shipment?`, `restock?` |
+| POST | `/api/v1/admin/orders/{id}/notes` | AdminAny | `note` (internal, no status change) |
+| PUT | `/api/v1/admin/orders/{id}/shipments/{shipmentId}` | AdminAny | `courierCompanyId`, `trackingNumber`, `shippedAt`, `note` (all sent) |
+| PUT | `/api/v1/admin/orders/{id}/payment` | AdminAny | `collectedAmount` (null clears), `collectedAt` (null = now), `version`; Delivered only |
+| GET | `/api/v1/admin/couriers[?activeOnly=true]`, `/{id}` | AdminAny | Courier companies |
+| POST, PUT | `/api/v1/admin/couriers`, `/{id}` | OwnerOnly | Create, change, deactivate (`isActive: false`); never deleted, none seeded |
+| GET, PUT | `/api/v1/admin/settings` | OwnerOnly | Every store setting except the logo; `version` (xmin) |
+
+### Checkout
+
+Body: `items[{ variantId, quantity, knownUnitPrice? }]` (1–50 lines, 1–99 each, duplicates merged), `customer{ firstName,
+lastName, email, phone }`, `address{ city, street, postalCode }`, `deliveryNote?` (≤ 500), `acceptedTerms` (must be true),
+`expectedTotal?`. Names ≤ 100 (letters, space, `-`, `.`, `'`), email ≤ 254, phone a Serbian number (`+381…`, `00381…`,
+`0…`; stored in E.164 `+381641234567`), city ≤ 100, street ≤ 200, postal code 5 digits. Messages are Serbian.
+
+One transaction (`CheckoutService`): advisory lock on the key → idempotency lookup → `ICartPricingService.QuoteAsync`
+(the quote's rules) → refusal checks → customer upsert by email (`ON CONFLICT`, latest name/phone) → order number (yearly
+counter row, `INSERT … ON CONFLICT DO UPDATE … RETURNING`, locked until commit, year in Europe/Belgrade) → address, order,
+item snapshots, history `Received` (no admin) → `IInventoryService.DeductAsync` (conditional updates in variant-id order,
+movements `OrderPlaced` with `order_id`) → commit. Response `201 { orderNumber, placedAt, items[{ variantId, productName,
+variantName, sku, unitPrice, quantity, lineTotal }], subtotal, shippingPrice, total, currency, paymentMethod: "CashOnDelivery",
+trackingCode: null }`. **`trackingCode` is always null in Phase 5**; Phase 6 issues the code (and the outbox email) inside
+the same transaction – the call site is marked in `CheckoutService`.
+
+Idempotency rules:
+
+- The browser creates one UUID when checkout opens and sends it with every retry of that submission.
+- Only a committed order uses the key. After any 400/409/429 nothing is stored and the same key may be sent again.
+- Same key + same content → `200` with the original order (`trackingCode` null). Same key + different content →
+  `409 IDEMPOTENCY_KEY_REUSED`. "Same content" = `orders.request_hash`, SHA-256 of the normalised request: merged and
+  sorted lines, trimmed texts, lower-case email, E.164 phone, note; `knownUnitPrice` and `expectedTotal` are not part of it.
+- Concurrent requests with one key are serialised by `pg_advisory_xact_lock`; the unique index is the last guard.
+
+Refusals (409, body has `quote` = the fresh cart quote, nothing stored): `SHIPPING_DISABLED`; `CART_CHANGED` (an adjustment
+in the fresh quote – unavailable, quantity reduced, price differs from `knownUnitPrice` – or `expectedTotal` differs;
+`errors` keys `items[i].variantId`, `items[i].quantity`, `items[i].knownUnitPrice`, `expectedTotal`, `i` = request index);
+`MINIMUM_ORDER_NOT_MET`; `INSUFFICIENT_STOCK` (stock taken between pricing and deduction; `errors["items[i].quantity"]`
+"Dostupno najviše: N."). Client prices are never used.
+
+Rate limit: `POST /orders` 5 per 10 minutes per client IP (`RateLimiting:Policies:CreateOrder`), PostgreSQL table
+`rate_limit_buckets` (fixed windows, key = policy + SHA-256 of the IP, one atomic upsert on its own connection, so all
+Lambda instances share it). Every request counts, including invalid ones. Exceeded → `429 RATE_LIMITED` with
+`Retry-After` (seconds; exposed through CORS). Reusable: `.RequirePostgresRateLimit(policyName)` on any endpoint plus a
+policy in `RateLimitPolicies`. Client IP: the `X-Forwarded-For` entry `ClientIp:TrustedProxyHops` positions from the right
+(default 1 = the address API Gateway appended; entries further left are client-supplied), else the connection address.
+`IRateLimiter.PurgeExpiredAsync` deletes old buckets – to be called by the Phase 6 worker. `RateLimiting:Enabled=false`
+switches limits off (integration tests).
+
+### Status state machine (P1.5) and stock (P1.6)
+
+| From | Allowed next | Needs | Stock |
+|---|---|---|---|
+| Received (Primljena) | Accepted, Rejected, Cancelled | – | Rejected/Cancelled: returned automatically (`OrderCancelled`) |
+| Accepted (Prihvaćena) | Preparing, Cancelled | – | Cancelled: returned automatically |
+| Preparing (U pripremi) | Shipped, Cancelled | Shipped: `shipment.courierCompanyId` (active); `trackingNumber`, `shippedAt` (default now), `note` optional | Cancelled: returned automatically |
+| Shipped (Poslata) | Delivered, DeliveryFailed | – | none |
+| DeliveryFailed (Neuspešna isporuka) | Shipped (new shipment row), Cancelled | Cancelled: `restock` true/false required | `restock: true` → `ReturnRestock`; false → nothing |
+| Delivered (Isporučena), Cancelled (Otkazana), Rejected (Odbijena) | – (final) | | |
+
+`OrderStatusMachine` (Domain) is the only definition; the detail returns it as `allowedNextStatuses[{ status,
+requiresShipment, stockReturn: None|Automatic|AdminChoice, requiresRestockChoice }]`. A transition is one transaction:
+version check (`xmin`; stale → `409 CONCURRENT_EDIT`), history row (previous, new, admin, internal note, customer message),
+shipment, stock return, `Order.StatusChanged` audit. Invalid → `409 INVALID_STATUS_TRANSITION` with `allowedNextStatuses`.
+`shipment` outside Shipped or `restock` outside DeliveryFailed → Cancelled → `400` (`errors.shipment` / `errors.restock`).
+Phase 6 inserts the outbox email row at the marked call site in `OrderAdminService.ChangeStatusAsync`.
+
+Notes are a separate append-only table `order_notes` (not history rows with `previous = new`): the history stays exactly one
+row per transition, so the tracking timeline and the "delivered in period" metric need no filter. Shipment edits and
+notes do not change the order `version`; status and payment changes do. Shipment dates and collection dates must not be in
+the future (5 min tolerance) or before the order was placed. Tracking URL = template with the URL-escaped tracking number.
+
+Audit: `Order.StatusChanged`, `Order.NoteAdded`, `Order.PaymentRecorded`, `Order.PaymentCleared` explicitly;
+`CourierCompany.*`, `Shipment.*`, `StoreSettings.Updated` through the interceptor.
+
+### Bestsellers
+
+`GET /catalog/bestsellers` and `sort=bestselling` use one metric: pieces of order items whose order is Delivered and whose
+Delivered transition is within `Catalog:BestsellerWindowDays` (default 90), visible products only; ties newest first.
+Bestsellers lists only products with such sales (empty without delivered orders); the sorted product list shows the others
+after them, newest first.
+
+### Cart quote addition
+
+`adjustments[].limitReason`: `stock` (stock below the per-order cap) or `orderLimit` (the cap `Catalog:MaxOrderQuantity`
+applies) on `quantityReduced`, null otherwise.
+
+New error codes: `IDEMPOTENCY_KEY_REUSED`, `CART_CHANGED`, `MINIMUM_ORDER_NOT_MET`, `SHIPPING_DISABLED`,
+`INVALID_STATUS_TRANSITION`, `ORDER_NOT_DELIVERED`, `COURIER_NAME_TAKEN` (`errors.name`); `INSUFFICIENT_STOCK` and
+`RATE_LIMITED` are now returned by checkout.
 
 ## Images
 
@@ -371,7 +483,8 @@ dotnet test Zladovce.sln
 pwsh backend/scripts/generate-openapi.ps1     # or: powershell -File backend/scripts/generate-openapi.ps1
 ```
 
-Run it after changing endpoints or DTOs and commit the file.
+Run it after changing endpoints or DTOs and commit the file. Note: the generator starts the application host in
+Development, so it also applies pending migrations to the local Docker database when that is running.
 
 ## Configuration
 
@@ -399,6 +512,10 @@ variables (`Section__Key`).
 | `Media:ReadyWaitSeconds` | How long attach waits for the image Lambda (default 8, clamped to 0–25). On AWS it must stay below the API Lambda timeout (15 s) and the 30 s HTTP API limit; the CDK configuration validates this |
 | `Media:UploadUrlLifetimeMinutes` | Lifetime of a pre-signed upload (default 10) |
 | `Catalog:MaxOrderQuantity` | Cap of `maxOrderQuantity` in the shop (default 20) |
+| `Catalog:BestsellerWindowDays` | Days of delivered orders counted for bestsellers (default 90) |
+| `RateLimiting:Enabled` | `false` switches every rate limit off (default `true`) |
+| `RateLimiting:Policies:CreateOrder:PermitLimit`, `WindowSeconds` | Checkout limit per client IP (default 5 per 600 s) |
+| `ClientIp:TrustedProxyHops` | Trusted proxies appending to `X-Forwarded-For` (default 1 = API Gateway; 0 = connection address only) |
 
 Nothing the API needs depends on the environment being called `Development`: deployed environments (`Dev`,
 `Staging`, `Production`) only differ in configuration; Swagger, start-up migration and the development

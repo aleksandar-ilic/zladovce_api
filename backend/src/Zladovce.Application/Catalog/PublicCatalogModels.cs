@@ -11,6 +11,11 @@ public sealed class CatalogOptions
 
     /// <summary>Largest quantity of one variant a customer may order at once, whatever the stock.</summary>
     public int MaxOrderQuantity { get; set; } = 20;
+
+    /// <summary>
+    /// Bestsellers (and <c>sort=bestselling</c>) count the pieces sold in orders delivered within this many days (default 90).
+    /// </summary>
+    public int BestsellerWindowDays { get; set; } = 90;
 }
 
 public enum PublicProductSort

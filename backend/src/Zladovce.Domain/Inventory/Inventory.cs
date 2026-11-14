@@ -129,7 +129,7 @@ public sealed class InventoryMovement
     public int QuantityAfter { get; private set; }
     public string? Reason { get; private set; }
 
-    /// <summary>The order that caused the movement. The foreign key is added together with the orders table.</summary>
+    /// <summary>The order that caused the movement (foreign key to <c>orders</c>).</summary>
     public Guid? OrderId { get; private set; }
 
     /// <summary>Null = the system (for example checkout).</summary>

@@ -3,9 +3,13 @@ using Zladovce.Application.Common;
 using Zladovce.Domain.Audit;
 using Zladovce.Domain.Catalog;
 using Zladovce.Domain.Categories;
+using Zladovce.Domain.Customers;
 using Zladovce.Domain.Identity;
 using Zladovce.Domain.Inventory;
+using Zladovce.Domain.Orders;
+using Zladovce.Domain.Shipping;
 using Zladovce.Domain.StoreSettings;
+using Zladovce.Infrastructure.RateLimiting;
 
 namespace Zladovce.Infrastructure.Persistence;
 
@@ -26,6 +30,16 @@ public sealed class ZladovceDbContext(DbContextOptions<ZladovceDbContext> option
     public DbSet<ProductImage> ProductImages => Set<ProductImage>();
     public DbSet<InventoryItem> Inventory => Set<InventoryItem>();
     public DbSet<InventoryMovement> InventoryMovements => Set<InventoryMovement>();
+    public DbSet<Customer> Customers => Set<Customer>();
+    public DbSet<Address> Addresses => Set<Address>();
+    public DbSet<Order> Orders => Set<Order>();
+    public DbSet<OrderItem> OrderItems => Set<OrderItem>();
+    public DbSet<OrderStatusHistoryEntry> OrderStatusHistory => Set<OrderStatusHistoryEntry>();
+    public DbSet<OrderNote> OrderNotes => Set<OrderNote>();
+    public DbSet<OrderNumberCounter> OrderNumberCounters => Set<OrderNumberCounter>();
+    public DbSet<CourierCompany> CourierCompanies => Set<CourierCompany>();
+    public DbSet<Shipment> Shipments => Set<Shipment>();
+    public DbSet<RateLimitBucket> RateLimitBuckets => Set<RateLimitBucket>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

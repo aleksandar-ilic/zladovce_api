@@ -4,8 +4,11 @@ using Microsoft.EntityFrameworkCore.Infrastructure;
 using Zladovce.Domain.Audit;
 using Zladovce.Domain.Catalog;
 using Zladovce.Domain.Categories;
+using Zladovce.Domain.Customers;
 using Zladovce.Domain.Identity;
 using Zladovce.Domain.Inventory;
+using Zladovce.Domain.Orders;
+using Zladovce.Domain.Shipping;
 using Zladovce.Domain.StoreSettings;
 
 namespace Zladovce.Application.Common;
@@ -25,6 +28,14 @@ public interface IZladovceDbContext
     DbSet<ProductImage> ProductImages { get; }
     DbSet<InventoryItem> Inventory { get; }
     DbSet<InventoryMovement> InventoryMovements { get; }
+    DbSet<Customer> Customers { get; }
+    DbSet<Address> Addresses { get; }
+    DbSet<Order> Orders { get; }
+    DbSet<OrderItem> OrderItems { get; }
+    DbSet<OrderStatusHistoryEntry> OrderStatusHistory { get; }
+    DbSet<OrderNote> OrderNotes { get; }
+    DbSet<CourierCompany> CourierCompanies { get; }
+    DbSet<Shipment> Shipments { get; }
 
     /// <summary>Transactions. Modules share one context so that a business operation is one transaction.</summary>
     DatabaseFacade Database { get; }

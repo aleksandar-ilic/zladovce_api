@@ -82,3 +82,11 @@ public sealed class InsufficientStockException(IReadOnlyList<StockShortage> shor
 {
     public IReadOnlyList<StockShortage> Shortages { get; } = shortages;
 }
+
+/// <summary>429 <c>RATE_LIMITED</c> – too many requests from one client; retry after <see cref="RetryAfter"/>.</summary>
+public sealed class RateLimitedException(TimeSpan retryAfter)
+    : AppException(ErrorCodes.RateLimited, ErrorTexts.RateLimitedTitle, ErrorTexts.RateLimitedDetail)
+{
+    /// <summary>Whole seconds until the current window ends (at least 1); sent as the <c>Retry-After</c> header.</summary>
+    public int RetryAfterSeconds { get; } = Math.Max(1, (int)Math.Ceiling(retryAfter.TotalSeconds));
+}
