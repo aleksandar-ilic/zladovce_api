@@ -16,6 +16,10 @@
 #   - GitHub environments `staging` and `production`, each with the variable
 #     AWS_DEPLOY_ROLE_ARN (and optionally AWS_REGION, default eu-central-1).
 #   - The `production` environment has "Required reviewers" configured = manual approval.
+#
+# The frontend is NOT built or deployed here: it lives in its own repository
+# (https://github.com/aleksandar-ilic/zladovce_web) and is deployed by Amplify Hosting
+# from that repository (infrastructure stack `Frontend`, off until amplify.enabled=true).
 # ======================================================================================
 name: Deploy
 
@@ -71,7 +75,9 @@ jobs:
           dotnet publish backend/src/Zladovce.Api -c Release -r linux-arm64
           --self-contained false -o backend/artifacts/api
 
-      - name: Publish migration Lambda package
+      # One package for every non-HTTP handler: the migration runner (Migrations stack) and the
+      # image processor (Media stack). Path = lambdaAssetPath in infrastructure/lib/config.ts.
+      - name: Publish Lambda package (migration runner, image processor)
         run: >
           dotnet publish backend/src/Zladovce.Lambda -c Release -r linux-arm64
           --self-contained false -o backend/artifacts/lambda
@@ -101,28 +107,52 @@ jobs:
           -c env="$CDK_ENV" -c requireArtifacts=true
           --require-approval never --outputs-file outputs-migrations.json
 
-      # Step 2: apply database migrations (forward-only and backward-compatible, so the
+      # Step 2: database roles, then migrations.
+      #
+      # {"action":"bootstrap"} creates/repairs the IAM-authenticated roles zladovce_migrator and
+      # zladovce_app with the RDS-managed master secret. It is idempotent, so it runs on EVERY deploy
+      # while the Migrations stack output MigrationBootstrapEnabled is "true"
+      # (database.migrationRunnerCanReadMasterSecret in lib/config.ts). Running it every time means a
+      # first deploy needs no manual step and a drifted role is repaired; the cost is a few seconds.
+      # Setting the switch to false removes the master-secret permission and this step is skipped.
+      #
+      # {"action":"migrate"} then applies migrations (forward-only and backward-compatible, so the
       # currently running API version keeps working).
-      - name: Run database migrations
+      - name: Bootstrap database roles and run migrations
         working-directory: infrastructure
         run: |
           set -euo pipefail
-          FUNCTION_NAME=$(jq -r --arg stack "${STACK_PREFIX}-Migrations" '.[$stack].MigrationFunctionName' outputs-migrations.json)
-          echo "Invoking $FUNCTION_NAME"
-          aws lambda invoke \
-            --function-name "$FUNCTION_NAME" \
-            --cli-binary-format raw-in-base64-out \
-            --cli-read-timeout 330 \
-            --payload '{}' \
-            migration-result.json > migration-invoke.json
-          cat migration-invoke.json
-          cat migration-result.json
-          if [ "$(jq -r '.FunctionError // empty' migration-invoke.json)" != "" ]; then
-            echo "::error::Database migration failed"
-            exit 1
-          fi
+          STACK="${STACK_PREFIX}-Migrations"
+          FUNCTION_NAME=$(jq -r --arg stack "$STACK" '.[$stack].MigrationFunctionName' outputs-migrations.json)
+          BOOTSTRAP=$(jq -r --arg stack "$STACK" '.[$stack].MigrationBootstrapEnabled // "false"' outputs-migrations.json)
 
-      # Step 3: the new API version and everything else.
+          invoke() {
+            local action="$1"
+            echo "Invoking $FUNCTION_NAME with action=$action"
+            aws lambda invoke \
+              --function-name "$FUNCTION_NAME" \
+              --cli-binary-format raw-in-base64-out \
+              --cli-read-timeout 330 \
+              --payload "{\"action\":\"$action\"}" \
+              "$action-result.json" > "$action-invoke.json"
+            cat "$action-invoke.json"
+            cat "$action-result.json"
+            echo
+            if [ "$(jq -r '.FunctionError // empty' "$action-invoke.json")" != "" ]; then
+              echo "::error::Migration runner action '$action' failed"
+              exit 1
+            fi
+          }
+
+          if [ "$BOOTSTRAP" = "true" ]; then
+            invoke bootstrap
+          else
+            echo "Role bootstrap disabled (MigrationBootstrapEnabled=$BOOTSTRAP); skipping."
+          fi
+          invoke migrate
+
+      # Step 3: the new API version and everything else (Media stack with the image processor and
+      # its S3 trigger, Observability alarms, ...).
       - name: Deploy all stacks
         working-directory: infrastructure
         run: >

@@ -45,7 +45,22 @@ describe('observability', () => {
       MetricName: 'StatusCheckFailed',
       TreatMissingData: 'breaching',
     });
-    expect(alarms).toHaveLength(9);
+    expect(alarms).toHaveLength(11);
+  });
+
+  test('image processor: errors and dead-lettered uploads', () => {
+    const errors = alarm('ImageProcessorErrors').Properties;
+    expect(errors).toMatchObject({ Namespace: 'AWS/Lambda', MetricName: 'Errors', Statistic: 'Sum', Threshold: 3 });
+    expect(JSON.stringify(errors.Dimensions)).toContain('ImageProcessorFunction');
+
+    const deadLetters = alarm('ImageProcessorDeadLetters').Properties;
+    expect(deadLetters).toMatchObject({
+      Namespace: 'AWS/SQS',
+      MetricName: 'ApproximateNumberOfMessagesVisible',
+      Threshold: 1,
+      ComparisonOperator: 'GreaterThanOrEqualToThreshold',
+    });
+    expect(JSON.stringify(deadLetters.Dimensions)).toContain('ImageProcessorDeadLetterQueue');
   });
 
   test('every alarm notifies the topic', () => {
@@ -77,6 +92,7 @@ describe('tags, outputs and stack settings', () => {
     for (const fn of [
       ...Object.values(prod.api.findResources('AWS::Lambda::Function')),
       ...Object.values(prod.migrations.findResources('AWS::Lambda::Function')),
+      ...Object.values(prod.media.findResources('AWS::Lambda::Function')),
     ] as any[]) {
       expectTags(fn, 'prod');
     }
@@ -93,6 +109,8 @@ describe('tags, outputs and stack settings', () => {
     dev.auth.hasOutput('UserPoolClientId', {});
     dev.media.hasOutput('MediaBucketName', {});
     dev.media.hasOutput('MediaDistributionDomainName', {});
+    dev.media.hasOutput('ImageProcessorFunctionName', {});
+    dev.migrations.hasOutput('MigrationBootstrapEnabled', {});
     dev.database.hasOutput('DatabaseEndpoint', {});
   });
 
@@ -131,8 +149,14 @@ describe('frontend hosting (Amplify)', () => {
     }
   });
 
-  test('enabling it without repository settings is rejected', () => {
-    expect(() => buildApp('dev', { amplify: { enabled: true } })).toThrow(/amplify\.repository/);
+  test('defaults point at the separate frontend repository; enabling needs the access token secret', () => {
+    for (const envName of ENV_NAMES) {
+      expect(getEnvironmentConfig(envName).amplify.repository).toBe('https://github.com/aleksandar-ilic/zladovce_web');
+    }
+    expect(() => buildApp('dev', { amplify: { enabled: true } })).toThrow(/amplify\.accessTokenSecretName/);
+    expect(() => buildApp('dev', { amplify: { enabled: true, repository: '', accessTokenSecretName: 'x' } })).toThrow(
+      /amplify\.repository/,
+    );
   });
 
   describe('when enabled', () => {
@@ -140,19 +164,38 @@ describe('frontend hosting (Amplify)', () => {
     const apps = Object.values(frontend.findResources('AWS::Amplify::App')) as any[];
     const app = (name: string): any => apps.find((a) => a.Properties.Name === name);
 
-    test('two apps (storefront, admin) built from the monorepo root "frontend"', () => {
+    test('two apps (storefront, admin) built from the root of the frontend repository', () => {
       expect(apps).toHaveLength(2);
       frontend.resourceCountIs('AWS::Amplify::Branch', 2);
       for (const name of ['zladovce-staging-storefront', 'zladovce-staging-admin']) {
         const properties = app(name).Properties;
         expect(properties.Repository).toBe('https://git.example.invalid/owner/repository');
-        expect(properties.EnvironmentVariables).toEqual(
-          expect.arrayContaining([{ Name: 'AMPLIFY_MONOREPO_APP_ROOT', Value: 'frontend' }]),
-        );
-        expect(properties.BuildSpec).toContain('appRoot: frontend');
+        // Not a monorepo any more: no app root anywhere.
+        const names: string[] = properties.EnvironmentVariables.map((v: any) => v.Name);
+        expect(names).not.toContain('AMPLIFY_MONOREPO_APP_ROOT');
+        const spec = (properties.BuildSpec as string)
+          .split('\n')
+          .filter((line) => !line.trimStart().startsWith('#'))
+          .join('\n');
+        expect(spec).not.toContain('appRoot');
+        expect(spec).not.toContain('applications:');
+        expect(spec).not.toContain('frontend/');
+        expect(spec).toMatch(/^version: 1$/m);
+        expect(spec).toMatch(/^frontend:$/m);
       }
-      expect(app('zladovce-staging-storefront').Properties.BuildSpec).toContain('npm run build:storefront');
-      expect(app('zladovce-staging-admin').Properties.BuildSpec).toContain('npm run build:admin');
+      const storefront = app('zladovce-staging-storefront').Properties.BuildSpec;
+      expect(storefront).toContain('npm run build:storefront');
+      expect(storefront).toMatch(/^ {4}baseDirectory: dist\/storefront\/browser$/m);
+      const admin = app('zladovce-staging-admin').Properties.BuildSpec;
+      expect(admin).toContain('npm run build:admin');
+      expect(admin).toMatch(/^ {4}baseDirectory: dist\/admin\/browser$/m);
+    });
+
+    test('default repository is used when only the token secret is configured', () => {
+      const result = synth('staging', { amplify: { enabled: true, accessTokenSecretName: 'zladovce/test/git-token' } });
+      for (const a of Object.values(result.frontend!.findResources('AWS::Amplify::App')) as any[]) {
+        expect(a.Properties.Repository).toBe('https://github.com/aleksandar-ilic/zladovce_web');
+      }
     });
 
     test('access token is a Secrets Manager dynamic reference, never a literal', () => {
@@ -208,13 +251,44 @@ describe('configuration', () => {
     ).toThrow(/CORS origin/);
   });
 
+  test('the former context name migrationAssetPath still sets the Lambda package path', () => {
+    const app = new App({ context: { migrationAssetPath: '/tmp/old-name' } });
+    expect(applyContextOverrides(getEnvironmentConfig('dev'), app.node).api.lambdaAssetPath).toBe('/tmp/old-name');
+  });
+
+  test('the image wait must end before the API Lambda timeout and the HTTP API integration timeout', () => {
+    const config = getEnvironmentConfig('dev');
+    expect(config.api.mediaReadyWaitSeconds).toBe(8);
+    expect(config.api.mediaReadyWaitSeconds).toBeLessThan(config.api.timeoutSeconds);
+    expect(() => validateConfig(withOverrides(config, { api: { mediaReadyWaitSeconds: 15 } }))).toThrow(
+      /mediaReadyWaitSeconds \(15\) must be below the API Lambda timeout/,
+    );
+    expect(() =>
+      validateConfig(withOverrides(config, { api: { timeoutSeconds: 30, mediaReadyWaitSeconds: 30 } })),
+    ).toThrow(/below the HTTP API integration timeout \(30 s\)/);
+    expect(() => validateConfig(withOverrides(config, { api: { timeoutSeconds: 40 } }))).toThrow(
+      /api\.timeoutSeconds \(40\) exceeds the HTTP API integration timeout/,
+    );
+    expect(() => validateConfig(withOverrides(config, { api: { mediaReadyWaitSeconds: -1 } }))).toThrow(/whole number/);
+    expect(() => validateConfig(withOverrides(config, { api: { mediaReadyWaitSeconds: 14 } }))).not.toThrow();
+    expect(() => buildApp('dev', { api: { mediaReadyWaitSeconds: 20 } })).toThrow(/mediaReadyWaitSeconds/);
+  });
+
+  test('other image and catalog settings are validated', () => {
+    const config = getEnvironmentConfig('dev');
+    expect(() => validateConfig(withOverrides(config, { api: { maxOrderQuantity: 0 } }))).toThrow(/maxOrderQuantity/);
+    expect(() => validateConfig(withOverrides(config, { media: { processorRetryAttempts: 3 } }))).toThrow(
+      /processorRetryAttempts/,
+    );
+  });
+
   test('context overrides: natMode, useRdsProxy, asset paths, alarm e-mail', () => {
     const app = new App({
       context: {
         natMode: 'gateway',
         useRdsProxy: 'true',
         apiAssetPath: '/tmp/api',
-        migrationAssetPath: '/tmp/lambda',
+        lambdaAssetPath: '/tmp/lambda',
         alarmEmail: 'alarms@example.test',
         account: '123456789012',
       },
@@ -223,7 +297,7 @@ describe('configuration', () => {
     expect(config.network.natMode).toBe('gateway');
     expect(config.database.useRdsProxy).toBe(true);
     expect(config.api.apiAssetPath).toBe('/tmp/api');
-    expect(config.api.migrationAssetPath).toBe('/tmp/lambda');
+    expect(config.api.lambdaAssetPath).toBe('/tmp/lambda');
     expect(config.observability.alarmEmail).toBe('alarms@example.test');
     expect(config.account).toBe('123456789012');
     // untouched values survive

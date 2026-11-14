@@ -42,7 +42,8 @@ function readBuildSpec(fileName: string): string {
 }
 
 /**
- * Amplify Hosting apps for the storefront and the admin application.
+ * Amplify Hosting apps for the storefront and the admin application, both built
+ * from the root of the frontend repository (zladovce_web, `amplify.repository`).
  *
  * Only instantiated when `amplify.enabled` is true, because connecting a
  * repository needs a Git provider access token stored in Secrets Manager.
@@ -91,8 +92,8 @@ export class FrontendStack extends Stack {
         "frame-ancestors 'none'",
       ].join('; ');
 
+    // The frontend repository has the Angular workspace at its root: no AMPLIFY_MONOREPO_APP_ROOT.
     const publicEnvironment = [
-      { name: 'AMPLIFY_MONOREPO_APP_ROOT', value: cfg.appRoot },
       { name: 'ZLADOVCE_ENVIRONMENT', value: config.envName },
       { name: 'ZLADOVCE_API_URL', value: props.apiUrl },
       { name: 'ZLADOVCE_MEDIA_BASE_URL', value: props.mediaBaseUrl },

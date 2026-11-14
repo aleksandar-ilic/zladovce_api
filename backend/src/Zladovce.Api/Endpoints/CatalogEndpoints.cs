@@ -152,7 +152,9 @@ public static class AdminCatalogEndpoints
             })
             .WithName("CreateAdminCategory")
             .WithSummary("Create a category. The slug is generated from the name when not given.")
-            .WithDescription("Errors: 400 VALIDATION_FAILED, INVALID_IMAGE, UPLOAD_NOT_FOUND; 409 SLUG_TAKEN, IMAGE_NOT_READY, IMAGE_ALREADY_ATTACHED.")
+            .WithDescription(
+                "Errors: 400 VALIDATION_FAILED, INVALID_IMAGE, UPLOAD_NOT_FOUND; 409 SLUG_TAKEN (`errors.slug`), IMAGE_NOT_READY, " +
+                "IMAGE_ALREADY_ATTACHED.")
             .Problems(StatusCodes.Status400BadRequest, StatusCodes.Status409Conflict);
 
         categories.MapPut("/order", async (ReorderCategoriesRequest request, ICategoryService service, CancellationToken ct) =>
@@ -173,7 +175,9 @@ public static class AdminCatalogEndpoints
                 TypedResults.Ok(await service.UpdateAsync(id, request, ct)))
             .WithName("UpdateAdminCategory")
             .WithSummary("Update a category. Empty slug keeps the current one; `imageKey` null removes the image.")
-            .WithDescription("Errors: 400 VALIDATION_FAILED, INVALID_IMAGE, UPLOAD_NOT_FOUND; 404 NOT_FOUND; 409 SLUG_TAKEN, IMAGE_NOT_READY, IMAGE_ALREADY_ATTACHED.")
+            .WithDescription(
+                "Errors: 400 VALIDATION_FAILED, INVALID_IMAGE, UPLOAD_NOT_FOUND; 404 NOT_FOUND; 409 SLUG_TAKEN (`errors.slug`), " +
+                "IMAGE_NOT_READY, IMAGE_ALREADY_ATTACHED.")
             .Problems(StatusCodes.Status400BadRequest, StatusCodes.Status404NotFound, StatusCodes.Status409Conflict);
 
         categories.MapDelete("/{id:guid}", async Task<NoContent> (Guid id, ICategoryService service, CancellationToken ct) =>
@@ -183,7 +187,9 @@ public static class AdminCatalogEndpoints
             })
             .WithName("ArchiveAdminCategory")
             .WithSummary("Archive a category. Refused while it has products that are not archived.")
-            .WithDescription("Errors: 404 NOT_FOUND; 409 CATEGORY_HAS_PRODUCTS.")
+            .WithDescription(
+                "The category image is removed with it: `image` is cleared in the same save and the image files are deleted " +
+                "afterwards. Errors: 404 NOT_FOUND; 409 CATEGORY_HAS_PRODUCTS.")
             .Problems(StatusCodes.Status404NotFound, StatusCodes.Status409Conflict);
     }
 
@@ -203,7 +209,9 @@ public static class AdminCatalogEndpoints
             })
             .WithName("CreateAdminProduct")
             .WithSummary("Create a product with at least one variant; each variant gets its stock record (and an InitialStock movement when above 0).")
-            .WithDescription("Errors: 400 VALIDATION_FAILED (also unknown/archived categoryId); 409 SLUG_TAKEN, SKU_TAKEN.")
+            .WithDescription(
+                "Errors: 400 VALIDATION_FAILED (also unknown/archived categoryId); 409 SLUG_TAKEN (`errors.slug`), SKU_TAKEN " +
+                "(`errors.sku` for the product SKU, otherwise one `errors[\"variants[i].sku\"]` per taken variant SKU, i = index in the request).")
             .Problems(StatusCodes.Status400BadRequest, StatusCodes.Status409Conflict);
 
         products.MapGet("/{id:guid}", async (Guid id, IAdminProductService service, CancellationToken ct) =>
@@ -217,7 +225,9 @@ public static class AdminCatalogEndpoints
                 TypedResults.Ok(await service.UpdateAsync(id, request, ct)))
             .WithName("UpdateAdminProduct")
             .WithSummary("Update product values. Requires the `version` last read; a stale version gives 409 CONCURRENT_EDIT.")
-            .WithDescription("Errors: 400 VALIDATION_FAILED; 404 NOT_FOUND; 409 CONCURRENT_EDIT, SLUG_TAKEN, SKU_TAKEN, NO_ACTIVE_VARIANT, PRODUCT_ARCHIVED.")
+            .WithDescription(
+                "Replaces every value: all members of the body must be sent. Errors: 400 VALIDATION_FAILED; 404 NOT_FOUND; " +
+                "409 CONCURRENT_EDIT, SLUG_TAKEN (`errors.slug`), SKU_TAKEN (`errors.sku`), NO_ACTIVE_VARIANT, PRODUCT_ARCHIVED.")
             .Problems(StatusCodes.Status400BadRequest, StatusCodes.Status404NotFound, StatusCodes.Status409Conflict);
 
         products.MapPost("/{id:guid}/archive", async (Guid id, IAdminProductService service, CancellationToken ct) =>
@@ -231,7 +241,7 @@ public static class AdminCatalogEndpoints
                 TypedResults.Ok(await service.RestoreAsync(id, ct)))
             .WithName("RestoreAdminProduct")
             .WithSummary("Restore an archived product. Idempotent.")
-            .WithDescription("Errors: 404 NOT_FOUND; 409 SLUG_TAKEN, SKU_TAKEN (reused meanwhile), CATEGORY_ARCHIVED.")
+            .WithDescription("Errors: 404 NOT_FOUND; 409 SLUG_TAKEN (`errors.slug`), SKU_TAKEN (`errors.sku`) (reused meanwhile), CATEGORY_ARCHIVED.")
             .Problems(StatusCodes.Status404NotFound, StatusCodes.Status409Conflict);
 
         products.MapPost("/{id:guid}/variants", async Task<Created<AdminProductResponse>> (
@@ -242,7 +252,7 @@ public static class AdminCatalogEndpoints
             })
             .WithName("AddAdminProductVariant")
             .WithSummary("Add a variant with its opening stock. Returns the whole product.")
-            .WithDescription("Errors: 400 VALIDATION_FAILED; 404 NOT_FOUND; 409 SKU_TAKEN, PRODUCT_ARCHIVED, CONFLICT (50 variants).")
+            .WithDescription("Errors: 400 VALIDATION_FAILED; 404 NOT_FOUND; 409 SKU_TAKEN (`errors.sku`), PRODUCT_ARCHIVED, CONFLICT (50 variants).")
             .Problems(StatusCodes.Status400BadRequest, StatusCodes.Status404NotFound, StatusCodes.Status409Conflict);
 
         products.MapPut("/{id:guid}/variants/{variantId:guid}", async (
@@ -250,7 +260,7 @@ public static class AdminCatalogEndpoints
                 TypedResults.Ok(await service.UpdateVariantAsync(id, variantId, request, ct)))
             .WithName("UpdateAdminProductVariant")
             .WithSummary("Update a variant (stock is changed through the inventory endpoints). Returns the whole product.")
-            .WithDescription("Errors: 400 VALIDATION_FAILED; 404 NOT_FOUND; 409 SKU_TAKEN, LAST_ACTIVE_VARIANT, PRODUCT_ARCHIVED.")
+            .WithDescription("Errors: 400 VALIDATION_FAILED; 404 NOT_FOUND; 409 SKU_TAKEN (`errors.sku`), LAST_ACTIVE_VARIANT, PRODUCT_ARCHIVED.")
             .Problems(StatusCodes.Status400BadRequest, StatusCodes.Status404NotFound, StatusCodes.Status409Conflict);
 
         products.MapDelete("/{id:guid}/variants/{variantId:guid}", async (
@@ -314,7 +324,10 @@ public static class AdminInventoryEndpoints
                 TypedResults.Ok(await service.ListAsync(query.ToCriteria(), ct)))
             .WithName("ListInventory")
             .WithSummary("Variants (of products that are not archived) with stock, threshold and status.")
-            .WithDescription("Errors: 400 VALIDATION_FAILED.")
+            .WithDescription(
+                "`status`: `ok`, `low`, `out`; several values comma-separated (`status=low,out`) and/or repeated " +
+                "(`status=low&status=out`) match any of them. `status=low,out` returns exactly the rows counted by " +
+                "`GET /admin/dashboard/low-stock` (link the dashboard card there). Errors: 400 VALIDATION_FAILED.")
             .Problems(StatusCodes.Status400BadRequest);
 
         inventory.MapPost("/{variantId:guid}/adjustments", async (
@@ -353,8 +366,10 @@ public static class AdminInventoryEndpoints
             })
             .WithTags("Admin – dashboard")
             .WithName("GetDashboardLowStock")
-            .WithSummary("Variants at or below their low-stock threshold, emptiest first. `limit` 1–100, default 10.")
-            .WithDescription("Errors: 400 VALIDATION_FAILED.")
+            .WithSummary("Variants with status `low` or `out` (at or below their low-stock threshold), emptiest first. `limit` 1–100, default 10.")
+            .WithDescription(
+                "Same rows as `GET /admin/inventory?status=low,out` (`totalItems` matches); the dashboard card should link there. " +
+                "Errors: 400 VALIDATION_FAILED.")
             .Problems(StatusCodes.Status400BadRequest);
     }
 }

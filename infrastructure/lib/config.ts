@@ -38,9 +38,18 @@ export const POSTGRES_ENGINE_VERSION: rds.PostgresEngineVersion = rds.PostgresEn
 export const DEFAULT_API_HANDLER = 'Zladovce.Api';
 /** assembly::type::method - must match backend/src/Zladovce.Lambda/MigrationRunner.cs. */
 export const DEFAULT_MIGRATION_HANDLER = 'Zladovce.Lambda::Zladovce.Lambda.MigrationRunner::HandleAsync';
+/** assembly::type::method - must match backend/src/Zladovce.Lambda/ImageProcessorFunction.cs. */
+export const DEFAULT_IMAGE_PROCESSOR_HANDLER = 'Zladovce.Lambda::Zladovce.Lambda.ImageProcessorFunction::HandleAsync';
 
 export const DEFAULT_API_ASSET_PATH = '../backend/artifacts/api';
-export const DEFAULT_MIGRATION_ASSET_PATH = '../backend/artifacts/lambda';
+/** Publish directory of backend/src/Zladovce.Lambda: one package for every non-HTTP handler (migrations, images). */
+export const DEFAULT_LAMBDA_ASSET_PATH = '../backend/artifacts/lambda';
+
+/**
+ * Maximum integration timeout of an API Gateway HTTP API (hard limit). The API answers `IMAGE_NOT_READY`
+ * after `api.mediaReadyWaitSeconds`, so that wait must end before this and before the Lambda timeout.
+ */
+export const HTTP_API_INTEGRATION_TIMEOUT_SECONDS = 30;
 
 /** S3 key prefixes. The API may only presign uploads under `uploads/`; CloudFront only serves `media/`. */
 export const UPLOADS_PREFIX = 'uploads/';
@@ -128,6 +137,13 @@ export interface MediaConfig {
   readonly autoDeleteObjects: boolean;
   readonly uploadsExpirationDays: number;
   readonly noncurrentVersionExpirationDays: number;
+  /** Image processor Lambda (S3 trigger on uploads/): memory. Magick.NET needs room for 1600 px renditions. */
+  readonly processorMemoryMb: number;
+  readonly processorTimeoutSeconds: number;
+  /** Retries of a failed asynchronous invocation (0-2) before the event goes to the dead-letter queue. */
+  readonly processorRetryAttempts: number;
+  /** How long failed events stay in the dead-letter queue. */
+  readonly deadLetterRetentionDays: number;
 }
 
 export interface ApiConfig {
@@ -153,9 +169,18 @@ export interface ApiConfig {
   readonly aspnetEnvironment: 'Dev' | 'Staging' | 'Production';
   readonly apiAssetPath: string;
   readonly apiHandler: string;
-  readonly migrationAssetPath: string;
+  /** Publish directory of the Zladovce.Lambda package (migration runner and image processor). */
+  readonly lambdaAssetPath: string;
   readonly migrationHandler: string;
+  readonly imageProcessorHandler: string;
   readonly migrationTimeoutSeconds: number;
+  /**
+   * `Media__ReadyWaitSeconds`: how long the attach endpoints wait for the image processor before answering
+   * 409 IMAGE_NOT_READY. Must be below `timeoutSeconds` and the HTTP API integration timeout (validated).
+   */
+  readonly mediaReadyWaitSeconds: number;
+  /** Optional `Catalog__MaxOrderQuantity` (cap of `maxOrderQuantity` in the shop). Unset = backend default (20). */
+  readonly maxOrderQuantity?: number;
 }
 
 export interface ObservabilityConfig {
@@ -170,15 +195,16 @@ export interface ObservabilityConfig {
 }
 
 export interface AmplifyConfig {
-  /** Off by default: connecting a repository needs a Git provider token that does not exist yet. */
+  /** Off by default: connecting a repository needs a Git provider token (or GitHub App connection) that does not exist yet. */
   readonly enabled: boolean;
-  /** Repository URL, e.g. https://github.com/<owner>/<repo>. Required when enabled. */
+  /**
+   * Frontend repository URL (default: zladovce_web). The Angular workspace is at the repository root, so the
+   * build specs in `amplify/` are single-application specs (no monorepo `appRoot`).
+   */
   readonly repository?: string;
   readonly branch: string;
   /** Name of a Secrets Manager secret (plain string) that holds the Git provider access token. */
   readonly accessTokenSecretName?: string;
-  /** Monorepo application root. */
-  readonly appRoot: string;
   /** true = `Content-Security-Policy-Report-Only`, false = enforcing `Content-Security-Policy`. */
   readonly cspReportOnly: boolean;
 }
@@ -242,6 +268,10 @@ const baseMedia: MediaConfig = {
   autoDeleteObjects: false,
   uploadsExpirationDays: 1,
   noncurrentVersionExpirationDays: 30,
+  processorMemoryMb: 1024,
+  processorTimeoutSeconds: 60,
+  processorRetryAttempts: 2,
+  deadLetterRetentionDays: 14,
 };
 
 const baseApi: Omit<ApiConfig, 'aspnetEnvironment' | 'logRetentionDays'> = {
@@ -253,9 +283,12 @@ const baseApi: Omit<ApiConfig, 'aspnetEnvironment' | 'logRetentionDays'> = {
   throttleBurstLimit: 100,
   apiAssetPath: DEFAULT_API_ASSET_PATH,
   apiHandler: DEFAULT_API_HANDLER,
-  migrationAssetPath: DEFAULT_MIGRATION_ASSET_PATH,
+  lambdaAssetPath: DEFAULT_LAMBDA_ASSET_PATH,
   migrationHandler: DEFAULT_MIGRATION_HANDLER,
+  imageProcessorHandler: DEFAULT_IMAGE_PROCESSOR_HANDLER,
   migrationTimeoutSeconds: 300,
+  mediaReadyWaitSeconds: 8,
+  maxOrderQuantity: undefined,
 };
 
 const baseObservability: ObservabilityConfig = {
@@ -268,12 +301,14 @@ const baseObservability: ObservabilityConfig = {
   rdsMaxConnections: 60,
 };
 
+/** The frontend (storefront + admin Angular workspace) lives at the root of its own repository. */
+export const FRONTEND_REPOSITORY = 'https://github.com/aleksandar-ilic/zladovce_web';
+
 const baseAmplify: AmplifyConfig = {
   enabled: false,
-  repository: undefined,
+  repository: FRONTEND_REPOSITORY,
   branch: 'main',
   accessTokenSecretName: undefined,
-  appRoot: 'frontend',
   cspReportOnly: true,
 };
 
@@ -405,7 +440,7 @@ function contextBool(node: Node, key: string): boolean | undefined {
  * Command-line overrides (all optional):
  *   -c account=123456789012      -c region=eu-central-1
  *   -c natMode=instance|gateway  -c useRdsProxy=true|false
- *   -c apiAssetPath=<dir>        -c migrationAssetPath=<dir>
+ *   -c apiAssetPath=<dir>        -c lambdaAssetPath=<dir>   (former name: migrationAssetPath)
  *   -c alarmEmail=<address>
  */
 export function applyContextOverrides(config: EnvironmentConfig, node: Node): EnvironmentConfig {
@@ -416,7 +451,8 @@ export function applyContextOverrides(config: EnvironmentConfig, node: Node): En
   const region = contextString(node, 'region');
   const useRdsProxy = contextBool(node, 'useRdsProxy');
   const apiAssetPath = contextString(node, 'apiAssetPath');
-  const migrationAssetPath = contextString(node, 'migrationAssetPath');
+  // `migrationAssetPath` is the former name of `lambdaAssetPath` and is still accepted.
+  const lambdaAssetPath = contextString(node, 'lambdaAssetPath') ?? contextString(node, 'migrationAssetPath');
   const alarmEmail = contextString(node, 'alarmEmail');
 
   return withOverrides(config, {
@@ -429,7 +465,7 @@ export function applyContextOverrides(config: EnvironmentConfig, node: Node): En
     database: useRdsProxy === undefined ? {} : { useRdsProxy },
     api: {
       ...(apiAssetPath ? { apiAssetPath } : {}),
-      ...(migrationAssetPath ? { migrationAssetPath } : {}),
+      ...(lambdaAssetPath ? { lambdaAssetPath } : {}),
     },
     observability: alarmEmail ? { alarmEmail } : {},
   });
@@ -476,6 +512,38 @@ export function validateConfig(config: EnvironmentConfig): void {
   if (config.api.reservedConcurrency !== undefined && config.api.reservedConcurrency < 1) {
     errors.push('api.reservedConcurrency must be at least 1 (or undefined).');
   }
+  if (config.api.timeoutSeconds > HTTP_API_INTEGRATION_TIMEOUT_SECONDS) {
+    errors.push(
+      `api.timeoutSeconds (${config.api.timeoutSeconds}) exceeds the HTTP API integration timeout ` +
+        `(${HTTP_API_INTEGRATION_TIMEOUT_SECONDS} s); the gateway would give up first.`,
+    );
+  }
+  const wait = config.api.mediaReadyWaitSeconds;
+  if (!Number.isInteger(wait) || wait < 0) {
+    errors.push('api.mediaReadyWaitSeconds must be a whole number of seconds, 0 or more.');
+  }
+  if (wait >= config.api.timeoutSeconds) {
+    errors.push(
+      `api.mediaReadyWaitSeconds (${wait}) must be below the API Lambda timeout api.timeoutSeconds (${config.api.timeoutSeconds}).`,
+    );
+  }
+  if (wait >= HTTP_API_INTEGRATION_TIMEOUT_SECONDS) {
+    errors.push(
+      `api.mediaReadyWaitSeconds (${wait}) must be below the HTTP API integration timeout (${HTTP_API_INTEGRATION_TIMEOUT_SECONDS} s).`,
+    );
+  }
+  const maxOrderQuantity = config.api.maxOrderQuantity;
+  if (maxOrderQuantity !== undefined && (!Number.isInteger(maxOrderQuantity) || maxOrderQuantity < 1)) {
+    errors.push('api.maxOrderQuantity must be a whole number, 1 or more (or undefined).');
+  }
+  const retries = config.media.processorRetryAttempts;
+  if (!Number.isInteger(retries) || retries < 0 || retries > 2) {
+    errors.push('media.processorRetryAttempts must be 0, 1 or 2 (limit of Lambda asynchronous invocations).');
+  }
+  if (config.media.processorTimeoutSeconds < 1 || config.media.processorTimeoutSeconds > 900) {
+    errors.push('media.processorTimeoutSeconds must be between 1 and 900.');
+  }
+
   if (errors.length > 0) {
     throw new Error(`Invalid configuration for '${config.envName}':\n - ${errors.join('\n - ')}`);
   }

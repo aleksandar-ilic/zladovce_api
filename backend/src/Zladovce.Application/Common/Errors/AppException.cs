@@ -45,8 +45,16 @@ public sealed class NotFoundException(
 public sealed class ConflictException(
     string? detail = null,
     string code = ErrorCodes.Conflict,
-    string? title = null)
-    : AppException(code, title ?? ErrorTexts.ConflictTitle, detail ?? ErrorTexts.ConflictDetail);
+    string? title = null,
+    IReadOnlyDictionary<string, string[]>? errors = null)
+    : AppException(code, title ?? ErrorTexts.ConflictTitle, detail ?? ErrorTexts.ConflictDetail)
+{
+    /// <summary>
+    /// Optional field path (camelCase, same style as validation errors) → messages, for conflicts caused by one field
+    /// (<c>SLUG_TAKEN</c>, <c>SKU_TAKEN</c>), so that the form can mark that field.
+    /// </summary>
+    public IReadOnlyDictionary<string, string[]>? Errors { get; } = errors;
+}
 
 /// <summary>403 – the caller is known but not allowed.</summary>
 public sealed class ForbiddenException(

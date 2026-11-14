@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text.Encodings.Web;
 using System.Text.Json.Serialization;
+using System.Text.Json.Serialization.Metadata;
 using FluentValidation;
 using Microsoft.Extensions.Options;
 using Serilog;
@@ -11,6 +12,7 @@ using Zladovce.Api.Endpoints;
 using Zladovce.Api.Errors;
 using Zladovce.Api.Logging;
 using Zladovce.Api.OpenApi;
+using Zladovce.Api.Validation;
 using Zladovce.Application;
 using Zladovce.Application.Common;
 using Zladovce.Infrastructure;
@@ -75,6 +77,9 @@ public static class ApiHost
             options.SerializerOptions.NumberHandling = JsonNumberHandling.Strict;
             // Serbian letters are written as-is; responses are JSON, never HTML.
             options.SerializerOptions.Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping;
+            // Members declared `required` must be sent; a missing one is a 400 VALIDATION_FAILED with its field path.
+            options.SerializerOptions.TypeInfoResolver = (options.SerializerOptions.TypeInfoResolver ?? new DefaultJsonTypeInfoResolver())
+                .WithAddedModifier(RequiredMembers.Modifier);
         });
 
         // Binding failures (malformed JSON and the like) must reach the exception middleware in every environment.

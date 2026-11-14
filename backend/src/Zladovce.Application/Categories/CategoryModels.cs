@@ -5,31 +5,43 @@ using Zladovce.Domain.Categories;
 
 namespace Zladovce.Application.Categories;
 
-/// <summary>Body of category create and update.</summary>
-/// <param name="Name">Required, up to 120 characters.</param>
-/// <param name="Slug">Optional. Create: generated from the name when empty. Update: empty keeps the current slug.</param>
-/// <param name="Description">Optional plain text, up to 2000 characters.</param>
-/// <param name="ImageKey">
-/// Null removes the image. The current <c>image.key</c> keeps it. An upload key returned by
-/// <c>POST /admin/media/upload-url</c> (purpose <c>category</c>) replaces it.
-/// </param>
-/// <param name="SortOrder">Position in lists, 0 or greater.</param>
-/// <param name="IsActive">Inactive categories and their products are hidden from the shop.</param>
-/// <param name="SeoTitle">Optional, up to 120 characters.</param>
-/// <param name="SeoDescription">Optional, up to 320 characters.</param>
-public sealed record SaveCategoryRequest(
-    string? Name,
-    string? Slug,
-    string? Description,
-    string? ImageKey,
-    int SortOrder = 0,
-    bool IsActive = true,
-    string? SeoTitle = null,
-    string? SeoDescription = null);
+/// <summary>
+/// Body of category create and update. Every member must be sent (nullable ones may be <c>null</c>);
+/// a missing member gives 400 <c>VALIDATION_FAILED</c>.
+/// </summary>
+public sealed record SaveCategoryRequest
+{
+    /// <summary>Required, up to 120 characters.</summary>
+    public required string Name { get; init; }
+
+    /// <summary>Create: <c>null</c> or empty generates the slug from the name. Update: <c>null</c> or empty keeps the current slug.</summary>
+    public required string? Slug { get; init; }
+
+    /// <summary>Plain text, up to 2000 characters; <c>null</c> = none.</summary>
+    public required string? Description { get; init; }
+
+    /// <summary>
+    /// <c>null</c> removes the image. The current <c>image.key</c> keeps it. An upload key returned by
+    /// <c>POST /admin/media/upload-url</c> (purpose <c>category</c>) replaces it.
+    /// </summary>
+    public required string? ImageKey { get; init; }
+
+    /// <summary>Position in lists, 0 or greater.</summary>
+    public required int SortOrder { get; init; }
+
+    /// <summary>Inactive categories and their products are hidden from the shop.</summary>
+    public required bool IsActive { get; init; }
+
+    /// <summary>Up to 120 characters; <c>null</c> = none.</summary>
+    public required string? SeoTitle { get; init; }
+
+    /// <summary>Up to 320 characters; <c>null</c> = none.</summary>
+    public required string? SeoDescription { get; init; }
+}
 
 /// <summary>Body of <c>PUT /api/v1/admin/categories/order</c>.</summary>
 /// <param name="Ids">Every category that is not archived, exactly once, in the new order.</param>
-public sealed record ReorderCategoriesRequest(IReadOnlyList<Guid>? Ids);
+public sealed record ReorderCategoriesRequest(IReadOnlyList<Guid> Ids);
 
 /// <summary>Image of a category.</summary>
 /// <param name="Key">Storage key; send it back as <c>imageKey</c> to keep the image.</param>

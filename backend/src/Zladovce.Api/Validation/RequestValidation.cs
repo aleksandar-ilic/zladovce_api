@@ -8,6 +8,8 @@ public static class RequestValidation
     /// <summary>
     /// Validates every handler argument that has a registered FluentValidation validator before the
     /// handler runs. Applied once to the <c>/api/v1</c> group, so new endpoints are covered automatically.
+    /// Members declared <c>required</c> that the JSON body did not contain are reported first (<see cref="RequiredMembers"/>);
+    /// the validator's messages for those fields are then left out.
     /// Failures become a 400 <c>VALIDATION_FAILED</c> response with the <c>errors</c> map.
     /// </summary>
     public static TBuilder WithRequestValidation<TBuilder>(this TBuilder builder)
@@ -27,7 +29,14 @@ public static class RequestValidation
 
             return async invocationContext =>
             {
-                Dictionary<string, List<string>>? errors = null;
+                var errors = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+
+                foreach (var (index, _) in candidates)
+                {
+                    RequiredMembers.CollectMissing(invocationContext.Arguments[index], string.Empty, errors);
+                }
+
+                var missing = errors.Keys.ToHashSet(StringComparer.Ordinal);
 
                 foreach (var (index, validatorType) in candidates)
                 {
@@ -44,8 +53,12 @@ public static class RequestValidation
 
                     foreach (var failure in result.Errors)
                     {
-                        errors ??= new Dictionary<string, List<string>>(StringComparer.Ordinal);
                         var key = ToCamelCasePath(failure.PropertyName);
+                        if (missing.Contains(key))
+                        {
+                            continue;
+                        }
+
                         if (!errors.TryGetValue(key, out var messages))
                         {
                             errors[key] = messages = [];
@@ -55,7 +68,7 @@ public static class RequestValidation
                     }
                 }
 
-                if (errors is not null)
+                if (errors.Count > 0)
                 {
                     throw new RequestValidationException(errors.ToDictionary(e => e.Key, e => e.Value.ToArray()));
                 }

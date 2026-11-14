@@ -22,16 +22,29 @@ public enum InventorySort
 }
 
 /// <summary>Filter of the inventory list.</summary>
-public sealed record InventoryListCriteria(string? Search, StockStatus? Status, InventorySort Sort, PageRequest Page);
+/// <param name="Statuses">Rows in any of these statuses; empty = every status.</param>
+public sealed record InventoryListCriteria(string? Search, IReadOnlySet<StockStatus> Statuses, InventorySort Sort, PageRequest Page);
+
+public static class InventoryStatusFilter
+{
+    /// <summary>
+    /// What "low on stock" means on the dashboard: <c>low</c> and <c>out</c> (stock at or below the threshold, including zero).
+    /// The dashboard card links to <c>GET /api/v1/admin/inventory?status=low,out</c>, which returns exactly the same rows.
+    /// </summary>
+    public static readonly IReadOnlySet<StockStatus> LowStock = new HashSet<StockStatus> { StockStatus.Low, StockStatus.Out };
+}
 
 /// <summary>Body of <c>POST /api/v1/admin/inventory/{variantId}/adjustments</c>.</summary>
 /// <param name="QuantityDelta">Change of the stock: positive adds, negative removes. Not zero.</param>
 /// <param name="Reason">Why the stock is corrected. Required, up to 500 characters.</param>
-public sealed record AdjustStockRequest(int QuantityDelta, string? Reason);
+public sealed record AdjustStockRequest(int QuantityDelta, string Reason);
 
 /// <summary>Body of <c>PUT /api/v1/admin/inventory/{variantId}/threshold</c>.</summary>
-/// <param name="LowStockThreshold">The variant counts as low on stock at or below this quantity. 0 or greater.</param>
-public sealed record SetLowStockThresholdRequest(int LowStockThreshold);
+public sealed record SetLowStockThresholdRequest
+{
+    /// <summary>The variant counts as low on stock at or below this quantity. 0 or greater. Must be sent.</summary>
+    public required int LowStockThreshold { get; init; }
+}
 
 /// <summary>One row of the inventory list: a variant with its stock.</summary>
 /// <param name="Status"><c>ok</c> (above the threshold), <c>low</c> (at or below it) or <c>out</c> (nothing on stock).</param>
@@ -64,9 +77,9 @@ public sealed record InventoryMovementResponse(
     string? AdminName,
     DateTimeOffset CreatedAt);
 
-/// <summary>Variants at or below their low-stock threshold, emptiest first.</summary>
+/// <summary>Variants with status <c>low</c> or <c>out</c> (stock at or below the threshold), emptiest first.</summary>
 /// <param name="Items">At most <c>limit</c> rows.</param>
-/// <param name="TotalItems">How many variants are at or below their threshold in total.</param>
+/// <param name="TotalItems">How many variants are <c>low</c> or <c>out</c> in total (= <c>totalItems</c> of <c>GET /admin/inventory?status=low,out</c>).</param>
 public sealed record LowStockResponse(IReadOnlyList<InventoryItemResponse> Items, int TotalItems);
 
 public sealed class AdjustStockRequestValidator : AbstractValidator<AdjustStockRequest>

@@ -26,7 +26,10 @@ public sealed record ApiProblem
     /// <summary>Serbian message that can be shown to the user.</summary>
     public required string Detail { get; init; }
 
-    /// <summary>Field path → messages. Present only for validation errors.</summary>
+    /// <summary>
+    /// Field path (camelCase, e.g. <c>variants[0].sku</c>) → messages. Present for validation errors
+    /// (400 <c>VALIDATION_FAILED</c>) and for conflicts caused by one field (409 <c>SLUG_TAKEN</c>, <c>SKU_TAKEN</c>).
+    /// </summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public IReadOnlyDictionary<string, string[]>? Errors { get; init; }
 

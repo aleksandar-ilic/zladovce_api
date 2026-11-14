@@ -154,9 +154,17 @@ public sealed class InventoryListQuery
     [FromQuery(Name = "q")]
     public string? Q { get; set; }
 
-    /// <summary><c>ok</c>, <c>low</c> or <c>out</c>; omitted = all.</summary>
+    /// <summary>
+    /// <c>ok</c>, <c>low</c> or <c>out</c>; several values comma-separated (<c>status=low,out</c>) and/or repeated
+    /// (<c>status=low&amp;status=out</c>) return rows in any of them; omitted = all. The dashboard low-stock list is
+    /// exactly <c>status=low,out</c>.
+    /// </summary>
     [FromQuery(Name = "status")]
-    public string? Status { get; set; }
+    public string[]? Status { get; set; }
+
+    /// <summary>The individual status values of <see cref="Status"/> (split at commas, trimmed, empty parts dropped).</summary>
+    public IEnumerable<string> StatusValuesRequested() =>
+        (Status ?? []).SelectMany(v => (v ?? string.Empty).Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
 
     /// <summary><c>product</c> (default: product name, then variant order), <c>stockAsc</c>, <c>stockDesc</c>.</summary>
     [FromQuery(Name = "sort")]
@@ -170,7 +178,9 @@ public sealed class InventoryListQuery
 
     public InventoryListCriteria ToCriteria() => new(
         Q,
-        Status switch { "ok" => StockStatus.Ok, "low" => StockStatus.Low, "out" => StockStatus.Out, _ => null },
+        StatusValuesRequested()
+            .Select(value => value switch { "ok" => StockStatus.Ok, "low" => StockStatus.Low, _ => StockStatus.Out })
+            .ToHashSet(),
         Sort switch { "stockAsc" => InventorySort.StockAscending, "stockDesc" => InventorySort.StockDescending, _ => InventorySort.Product },
         PageRequest.From(Page, PageSize));
 }
@@ -180,7 +190,10 @@ public sealed class InventoryListQueryValidator : AbstractValidator<InventoryLis
     public InventoryListQueryValidator()
     {
         RuleFor(q => q.Q).MaximumLength(ValidationRules.MaxSearchLength);
-        RuleFor(q => q.Status).OneOf(InventoryListQuery.StatusValues);
+        RuleFor(q => q.StatusValuesRequested())
+            .Must(values => values.All(value => InventoryListQuery.StatusValues.Contains(value, StringComparer.Ordinal)))
+            .OverridePropertyName("status")
+            .WithMessage($"Dozvoljene vrednosti: {string.Join(", ", InventoryListQuery.StatusValues)}.");
         RuleFor(q => q.Sort).OneOf(InventoryListQuery.SortValues);
         this.PagingRules(q => q.Page, q => q.PageSize);
     }

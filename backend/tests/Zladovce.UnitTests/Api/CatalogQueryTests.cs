@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization.Metadata;
 using Zladovce.Api.Endpoints;
 using Zladovce.Application.Catalog;
 using Zladovce.Application.Common.Errors;
@@ -47,7 +48,28 @@ public class CatalogQueryTests
     [InlineData("low", StockStatus.Low)]
     [InlineData("out", StockStatus.Out)]
     public void Inventory_status_maps(string status, StockStatus expected) =>
-        Assert.Equal(expected, new InventoryListQuery { Status = status }.ToCriteria().Status);
+        Assert.Equal([expected], new InventoryListQuery { Status = [status] }.ToCriteria().Statuses);
+
+    [Fact]
+    public void Inventory_status_accepts_comma_separated_and_repeated_values()
+    {
+        var criteria = new InventoryListQuery { Status = ["low, out", "low", ""] }.ToCriteria();
+        Assert.Equal(new HashSet<StockStatus> { StockStatus.Low, StockStatus.Out }, criteria.Statuses);
+    }
+
+    [Fact]
+    public void Inventory_without_status_has_no_status_filter() =>
+        Assert.Empty(new InventoryListQuery().ToCriteria().Statuses);
+
+    [Theory]
+    [InlineData("low,empty")]
+    [InlineData("LOW")]
+    public void Inventory_query_rejects_unknown_status_values(string status) =>
+        Assert.Contains(new InventoryListQueryValidator().Validate(new InventoryListQuery { Status = [status] }).Errors, e => e.PropertyName == "status");
+
+    [Fact]
+    public void Inventory_query_accepts_several_known_status_values() =>
+        Assert.True(new InventoryListQueryValidator().Validate(new InventoryListQuery { Status = ["low,out", "ok"] }).IsValid);
 
     [Fact]
     public void Inventory_sort_maps() =>
@@ -73,3 +95,46 @@ public class CatalogQueryTests
             PublicCatalogEndpoints.ParseVariantIds([string.Join(',', Enumerable.Range(0, 101).Select(_ => Guid.NewGuid()))]));
     }
 }
+
+public class RequiredMembersTests
+{
+    private static System.Text.Json.JsonSerializerOptions Options()
+    {
+        var options = new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web);
+        options.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter());
+        options.TypeInfoResolver = new System.Text.Json.Serialization.Metadata.DefaultJsonTypeInfoResolver()
+            .WithAddedModifier(Zladovce.Api.Validation.RequiredMembers.Modifier);
+        return options;
+    }
+
+    private static Dictionary<string, List<string>> Missing(object? model)
+    {
+        var errors = new Dictionary<string, List<string>>();
+        Zladovce.Api.Validation.RequiredMembers.CollectMissing(model, string.Empty, errors);
+        return errors;
+    }
+
+    [Fact]
+    public void Missing_members_are_reported_with_nested_paths_and_null_counts_as_sent()
+    {
+        var request = System.Text.Json.JsonSerializer.Deserialize<Zladovce.Application.Catalog.CreateProductRequest>(
+            """{ "categoryId": null, "name": "x", "sku": "X", "variants": [ { "name": "a", "sku": "A", "unitAmount": 1, "measurementUnit": "g", "regularPrice": 1, "discountPrice": null } ] }""",
+            Options());
+
+        Assert.Equal(
+            ["variants[0].initialStock", "variants[0].isActive", "variants[0].lowStockThreshold"],
+            Missing(request).Keys.Order());
+    }
+
+    [Fact]
+    public void Empty_object_misses_every_required_member_and_optional_ones_are_not_reported()
+    {
+        var request = System.Text.Json.JsonSerializer.Deserialize<Zladovce.Application.Catalog.AttachProductImageRequest>("{}", Options());
+        Assert.Equal(["uploadKey"], Missing(request).Keys);
+    }
+
+    [Fact]
+    public void Objects_not_created_by_the_deserializer_are_not_checked() =>
+        Assert.Empty(Missing(new Zladovce.Application.Inventory.SetLowStockThresholdRequest { LowStockThreshold = 1 }));
+}
+

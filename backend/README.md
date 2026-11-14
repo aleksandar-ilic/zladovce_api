@@ -91,7 +91,10 @@ curl http://localhost:5080/api/v1/admin/me -H "X-Dev-User-Email: owner@example.c
 | GET | `/api/v1/admin/me` | `AdminAny` | `{ id, email, fullName, role }` (`role` is `Owner` or `Staff`) |
 
 Errors are RFC 9457 Problem Details (`application/problem+json`) with a stable `code`, Serbian `title` and
-`detail`, `traceId`, and an `errors` map (camelCase field path → messages) for validation failures:
+`detail`, `traceId`, and an `errors` map (camelCase field path → messages) for validation failures and for the
+conflicts caused by one field (`409 SLUG_TAKEN` → `slug`; `409 SKU_TAKEN` → `sku` for the product base SKU and for a
+single variant add/update, `variants[i].sku` for each taken variant SKU of a create-product request, `i` = index in
+the request):
 
 ```json
 {
@@ -119,6 +122,28 @@ Request DTOs are validated automatically: any endpoint argument under `/api/v1` 
 FluentValidation `IValidator<T>` is validated before the handler runs. Put validators in
 `Zladovce.Application`; they are registered by assembly scan.
 
+Required members ("send every field"): a request member declared with the C# `required` keyword must be present in
+the JSON body; a nullable one may be `null`, but it must be there. A missing member is a `400 VALIDATION_FAILED` with
+the field path in `errors` (`"isFeatured"`, `"variants[1].isActive"`, message "Polje je obavezno …"), never a silent
+default. `RequiredMembers` (a System.Text.Json contract modifier plus a check in the validation filter) implements
+this; the OpenAPI document lists the same members as `required`, and a nullable member whose validator has a
+`NotNull`/`NotEmpty` rule is documented as non-nullable (sending `null` still gives `VALIDATION_FAILED`).
+Use `required` init properties (not positional records) for request bodies that need this.
+
+| Body | Must be sent |
+|---|---|
+| `POST products` | `categoryId`, `name`, `sku`, `variants` (each a full variant, below). Optional: `slug`, `shortDescription`, `description`, `isActive` (default true), `isFeatured` (default false), `seoTitle`, `seoDescription` |
+| `PUT products/{id}` | every member: `version`, `categoryId`, `name`, `slug`, `shortDescription`, `description`, `sku`, `isActive`, `isFeatured`, `seoTitle`, `seoDescription` |
+| variant (`POST`/`PUT …/variants`, items of `POST products`) | `name`, `sku`, `unitAmount`, `measurementUnit`, `regularPrice`, `discountPrice` (may be null), `isActive`; on create also `initialStock`, `lowStockThreshold`. Optional: `sortOrder` |
+| `POST`/`PUT categories` | every member: `name`, `slug`, `description`, `imageKey`, `sortOrder`, `isActive`, `seoTitle`, `seoDescription` |
+| `PUT products/{id}/images/order` | `imageIds`, `mainImageId` (may be null) |
+| `PUT products/{id}/images/{imageId}` | `altText` (may be null) |
+| `POST products/{id}/images` | `uploadKey`. Optional: `altText` |
+| `PUT inventory/{variantId}/threshold` | `lowStockThreshold` |
+| `POST inventory/{variantId}/adjustments` | `quantityDelta`, `reason` |
+| `PUT categories/order` | `ids` |
+| `POST media/upload-url` | `fileName`, `contentType`, `size`, `purpose` |
+
 ## Endpoints (Phase 3)
 
 Public (no authentication) under `/api/v1/catalog`: `GET categories`, `GET categories/{slug}`, `GET products`
@@ -128,8 +153,8 @@ Public (no authentication) under `/api/v1/catalog`: `GET categories`, `GET categ
 Admin (`AdminAny`, i.e. Owner or Staff) under `/api/v1/admin`: `categories` (list, create, read, update, archive,
 `PUT categories/order`), `products` (list, create, read, update with `version`, `POST {id}/archive`,
 `POST {id}/restore`), `products/{id}/variants[/{variantId}]`, `products/{id}/images[/order|/{imageId}]`,
-`POST media/upload-url`, `inventory` (list, `POST {variantId}/adjustments`, `PUT {variantId}/threshold`,
-`GET {variantId}/movements`), `GET dashboard/low-stock`.
+`POST media/upload-url`, `inventory` (list with `q`, `status`, `sort`, paging; `POST {variantId}/adjustments`,
+`PUT {variantId}/threshold`, `GET {variantId}/movements`), `GET dashboard/low-stock`.
 
 The exact contract (fields, query parameters, status codes, error codes in each operation's description) is
 `openapi/zladovce-v1.json`.
@@ -160,6 +185,11 @@ Inventory:
 - `IInventoryService.DeductAsync` / `ReturnAsync` take a list of variant + quantity, process variants in id order (no
   deadlocks), are all-or-nothing (`InsufficientStockException` lists every shortage) and join the caller's
   transaction when there is one (Phase 5 checkout). Parallel deductions are integration-tested against oversell.
+- Status of a variant: `out` (nothing on stock), `low` (at or below its threshold), `ok` (above it). The inventory list
+  filter `status` accepts several values, comma-separated and/or repeated (`status=low,out`, `status=low&status=out`)
+  and returns rows in any of them; one value works as before. "Low stock" on the dashboard (`GET dashboard/low-stock`)
+  is exactly `low` + `out` and uses the same filter, so **the dashboard card should link to the inventory list with
+  `status=low,out`** – its `totalItems` equals the card's `totalItems`.
 - `inventory_movements.order_id` is a plain nullable `uuid` **without a foreign key** for now; the orders table and the
   foreign key arrive in Phase 5.
 
@@ -190,7 +220,10 @@ Flow (product and category images alike; `purpose` decides the folder):
 5. Responses contain `baseUrl` and `widths`; a rendition is `{baseUrl}/{width}.webp`, so `srcset` is
    `widths.map(w => `${baseUrl}/${w}.webp ${w}w`)`.
 
-Deleting an image (or replacing a category image) deletes its renditions after the database change is saved.
+Deleting an image, replacing or removing a category image, and **archiving a category** delete the renditions after the
+database change is saved. Archiving clears `image_key` (and the image size) in the same save as the archive flag; the
+files are deleted only after that save succeeded, and a storage failure is logged (storage key only, no personal data)
+and leaves unused files, never a record pointing at missing files.
 
 Image library: **Magick.NET** (`Magick.NET-Q8-AnyCPU` 15.1.0, Apache-2.0; ImageMagick itself is under the
 ImageMagick licence, Apache-2.0 style). Free for commercial use; the package ships native binaries for `win-x64`,
@@ -298,7 +331,7 @@ variables (`Section__Key`).
 | `Media:Region` | Optional bucket region (defaults to the Lambda's region) |
 | `Media:ServiceUrl`, `ForcePathStyle`, `AccessKey`, `SecretKey` | S3-compatible endpoint (MinIO) — local development only; on AWS leave empty and the execution role is used |
 | `Media:ProcessInline` | `true` = the attach endpoint processes uploads itself (Development); `false` = the image Lambda does it |
-| `Media:ReadyWaitSeconds` | How long attach waits for the image Lambda (default 8) |
+| `Media:ReadyWaitSeconds` | How long attach waits for the image Lambda (default 8, clamped to 0–25). On AWS it must stay below the API Lambda timeout (15 s) and the 30 s HTTP API limit; the CDK configuration validates this |
 | `Media:UploadUrlLifetimeMinutes` | Lifetime of a pre-signed upload (default 10) |
 | `Catalog:MaxOrderQuantity` | Cap of `maxOrderQuantity` in the shop (default 20) |
 

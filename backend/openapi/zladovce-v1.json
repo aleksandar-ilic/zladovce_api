@@ -2,7 +2,7 @@
   "openapi": "3.1.1",
   "info": {
     "title": "Zladovce API",
-    "description": "API of the Zladovce shop. Errors are RFC 9457 Problem Details with a stable `code` and Serbian text. Endpoints under /api/v1/admin require an Amazon Cognito access token.",
+    "description": "API of the Zladovce shop. Errors are RFC 9457 Problem Details with a stable `code` and Serbian text. Endpoints under /api/v1/admin require an Amazon Cognito access token. Request members listed as `required` must be sent (a nullable one may be null); a missing member gives 400 VALIDATION_FAILED with the field in `errors`. 409 SLUG_TAKEN and SKU_TAKEN also carry `errors` pointing at the field (`slug`, `sku`, `variants[i].sku`).",
     "version": "v1"
   },
   "paths": {
@@ -507,8 +507,8 @@
         "tags": [
           "Admin – dashboard"
         ],
-        "summary": "Variants at or below their low-stock threshold, emptiest first. `limit` 1–100, default 10.",
-        "description": "Errors: 400 VALIDATION_FAILED.",
+        "summary": "Variants with status `low` or `out` (at or below their low-stock threshold), emptiest first. `limit` 1–100, default 10.",
+        "description": "Same rows as `GET /admin/inventory?status=low,out` (`totalItems` matches); the dashboard card should link there. Errors: 400 VALIDATION_FAILED.",
         "operationId": "GetDashboardLowStock",
         "parameters": [
           {
@@ -619,7 +619,7 @@
           "Admin – categories"
         ],
         "summary": "Create a category. The slug is generated from the name when not given.",
-        "description": "Errors: 400 VALIDATION_FAILED, INVALID_IMAGE, UPLOAD_NOT_FOUND; 409 SLUG_TAKEN, IMAGE_NOT_READY, IMAGE_ALREADY_ATTACHED.",
+        "description": "Errors: 400 VALIDATION_FAILED, INVALID_IMAGE, UPLOAD_NOT_FOUND; 409 SLUG_TAKEN (`errors.slug`), IMAGE_NOT_READY, IMAGE_ALREADY_ATTACHED.",
         "operationId": "CreateAdminCategory",
         "requestBody": {
           "content": {
@@ -829,7 +829,7 @@
           "Admin – categories"
         ],
         "summary": "Update a category. Empty slug keeps the current one; `imageKey` null removes the image.",
-        "description": "Errors: 400 VALIDATION_FAILED, INVALID_IMAGE, UPLOAD_NOT_FOUND; 404 NOT_FOUND; 409 SLUG_TAKEN, IMAGE_NOT_READY, IMAGE_ALREADY_ATTACHED.",
+        "description": "Errors: 400 VALIDATION_FAILED, INVALID_IMAGE, UPLOAD_NOT_FOUND; 404 NOT_FOUND; 409 SLUG_TAKEN (`errors.slug`), IMAGE_NOT_READY, IMAGE_ALREADY_ATTACHED.",
         "operationId": "UpdateAdminCategory",
         "parameters": [
           {
@@ -925,7 +925,7 @@
           "Admin – categories"
         ],
         "summary": "Archive a category. Refused while it has products that are not archived.",
-        "description": "Errors: 404 NOT_FOUND; 409 CATEGORY_HAS_PRODUCTS.",
+        "description": "The category image is removed with it: `image` is cleared in the same save and the image files are deleted afterwards. Errors: 404 NOT_FOUND; 409 CATEGORY_HAS_PRODUCTS.",
         "operationId": "ArchiveAdminCategory",
         "parameters": [
           {
@@ -1105,7 +1105,7 @@
           "Admin – products"
         ],
         "summary": "Create a product with at least one variant; each variant gets its stock record (and an InitialStock movement when above 0).",
-        "description": "Errors: 400 VALIDATION_FAILED (also unknown/archived categoryId); 409 SLUG_TAKEN, SKU_TAKEN.",
+        "description": "Errors: 400 VALIDATION_FAILED (also unknown/archived categoryId); 409 SLUG_TAKEN (`errors.slug`), SKU_TAKEN (`errors.sku` for the product SKU, otherwise one `errors[\"variants[i].sku\"]` per taken variant SKU, i = index in the request).",
         "operationId": "CreateAdminProduct",
         "requestBody": {
           "content": {
@@ -1248,7 +1248,7 @@
           "Admin – products"
         ],
         "summary": "Update product values. Requires the `version` last read; a stale version gives 409 CONCURRENT_EDIT.",
-        "description": "Errors: 400 VALIDATION_FAILED; 404 NOT_FOUND; 409 CONCURRENT_EDIT, SLUG_TAKEN, SKU_TAKEN, NO_ACTIVE_VARIANT, PRODUCT_ARCHIVED.",
+        "description": "Replaces every value: all members of the body must be sent. Errors: 400 VALIDATION_FAILED; 404 NOT_FOUND; 409 CONCURRENT_EDIT, SLUG_TAKEN (`errors.slug`), SKU_TAKEN (`errors.sku`), NO_ACTIVE_VARIANT, PRODUCT_ARCHIVED.",
         "operationId": "UpdateAdminProduct",
         "parameters": [
           {
@@ -1414,7 +1414,7 @@
           "Admin – products"
         ],
         "summary": "Restore an archived product. Idempotent.",
-        "description": "Errors: 404 NOT_FOUND; 409 SLUG_TAKEN, SKU_TAKEN (reused meanwhile), CATEGORY_ARCHIVED.",
+        "description": "Errors: 404 NOT_FOUND; 409 SLUG_TAKEN (`errors.slug`), SKU_TAKEN (`errors.sku`) (reused meanwhile), CATEGORY_ARCHIVED.",
         "operationId": "RestoreAdminProduct",
         "parameters": [
           {
@@ -1492,7 +1492,7 @@
           "Admin – products"
         ],
         "summary": "Add a variant with its opening stock. Returns the whole product.",
-        "description": "Errors: 400 VALIDATION_FAILED; 404 NOT_FOUND; 409 SKU_TAKEN, PRODUCT_ARCHIVED, CONFLICT (50 variants).",
+        "description": "Errors: 400 VALIDATION_FAILED; 404 NOT_FOUND; 409 SKU_TAKEN (`errors.sku`), PRODUCT_ARCHIVED, CONFLICT (50 variants).",
         "operationId": "AddAdminProductVariant",
         "parameters": [
           {
@@ -1590,7 +1590,7 @@
           "Admin – products"
         ],
         "summary": "Update a variant (stock is changed through the inventory endpoints). Returns the whole product.",
-        "description": "Errors: 400 VALIDATION_FAILED; 404 NOT_FOUND; 409 SKU_TAKEN, LAST_ACTIVE_VARIANT, PRODUCT_ARCHIVED.",
+        "description": "Errors: 400 VALIDATION_FAILED; 404 NOT_FOUND; 409 SKU_TAKEN (`errors.sku`), LAST_ACTIVE_VARIANT, PRODUCT_ARCHIVED.",
         "operationId": "UpdateAdminProductVariant",
         "parameters": [
           {
@@ -2170,7 +2170,7 @@
           "Admin – inventory"
         ],
         "summary": "Variants (of products that are not archived) with stock, threshold and status.",
-        "description": "Errors: 400 VALIDATION_FAILED.",
+        "description": "`status`: `ok`, `low`, `out`; several values comma-separated (`status=low,out`) and/or repeated (`status=low&status=out`) match any of them. `status=low,out` returns exactly the rows counted by `GET /admin/dashboard/low-stock` (link the dashboard card there). Errors: 400 VALIDATION_FAILED.",
         "operationId": "ListInventory",
         "parameters": [
           {
@@ -2184,7 +2184,10 @@
             "name": "status",
             "in": "query",
             "schema": {
-              "type": "string"
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
             }
           },
           {
@@ -2555,10 +2558,7 @@
             "format": "int32"
           },
           "reason": {
-            "type": [
-              "null",
-              "string"
-            ]
+            "type": "string"
           }
         }
       },
@@ -3012,16 +3012,12 @@
       },
       "AttachProductImageRequest": {
         "required": [
-          "uploadKey",
-          "altText"
+          "uploadKey"
         ],
         "type": "object",
         "properties": {
           "uploadKey": {
-            "type": [
-              "null",
-              "string"
-            ]
+            "type": "string"
           },
           "altText": {
             "type": [
@@ -3065,29 +3061,26 @@
         }
       },
       "CreateProductRequest": {
+        "required": [
+          "variants",
+          "categoryId",
+          "name",
+          "sku"
+        ],
         "type": "object",
         "properties": {
           "variants": {
-            "type": [
-              "null",
-              "array"
-            ],
+            "type": "array",
             "items": {
               "$ref": "#/components/schemas/CreateVariantRequest"
             }
           },
           "categoryId": {
-            "type": [
-              "null",
-              "string"
-            ],
+            "type": "string",
             "format": "uuid"
           },
           "name": {
-            "type": [
-              "null",
-              "string"
-            ]
+            "type": "string"
           },
           "slug": {
             "type": [
@@ -3108,10 +3101,7 @@
             ]
           },
           "sku": {
-            "type": [
-              "null",
-              "string"
-            ]
+            "type": "string"
           },
           "isActive": {
             "type": "boolean"
@@ -3143,30 +3133,32 @@
         "type": "object",
         "properties": {
           "fileName": {
-            "type": [
-              "null",
-              "string"
-            ]
+            "type": "string"
           },
           "contentType": {
-            "type": [
-              "null",
-              "string"
-            ]
+            "type": "string"
           },
           "size": {
             "type": "integer",
             "format": "int64"
           },
           "purpose": {
-            "type": [
-              "null",
-              "string"
-            ]
+            "type": "string"
           }
         }
       },
       "CreateVariantRequest": {
+        "required": [
+          "initialStock",
+          "lowStockThreshold",
+          "name",
+          "sku",
+          "unitAmount",
+          "measurementUnit",
+          "regularPrice",
+          "discountPrice",
+          "isActive"
+        ],
         "type": "object",
         "properties": {
           "initialStock": {
@@ -3178,39 +3170,20 @@
             "format": "int32"
           },
           "name": {
-            "type": [
-              "null",
-              "string"
-            ]
+            "type": "string"
           },
           "sku": {
-            "type": [
-              "null",
-              "string"
-            ]
+            "type": "string"
           },
           "unitAmount": {
-            "type": [
-              "null",
-              "number"
-            ],
+            "type": "number",
             "format": "double"
           },
           "measurementUnit": {
-            "oneOf": [
-              {
-                "type": "null"
-              },
-              {
-                "$ref": "#/components/schemas/MeasurementUnit"
-              }
-            ]
+            "$ref": "#/components/schemas/MeasurementUnit"
           },
           "regularPrice": {
-            "type": [
-              "null",
-              "number"
-            ],
+            "type": "number",
             "format": "double"
           },
           "discountPrice": {
@@ -4206,10 +4179,7 @@
         "type": "object",
         "properties": {
           "ids": {
-            "type": [
-              "null",
-              "array"
-            ],
+            "type": "array",
             "items": {
               "type": "string",
               "format": "uuid"
@@ -4225,10 +4195,7 @@
         "type": "object",
         "properties": {
           "imageIds": {
-            "type": [
-              "null",
-              "array"
-            ],
+            "type": "array",
             "items": {
               "type": "string",
               "format": "uuid"
@@ -4248,15 +4215,16 @@
           "name",
           "slug",
           "description",
-          "imageKey"
+          "imageKey",
+          "sortOrder",
+          "isActive",
+          "seoTitle",
+          "seoDescription"
         ],
         "type": "object",
         "properties": {
           "name": {
-            "type": [
-              "null",
-              "string"
-            ]
+            "type": "string"
           },
           "slug": {
             "type": [
@@ -4278,12 +4246,10 @@
           },
           "sortOrder": {
             "type": "integer",
-            "format": "int32",
-            "default": 0
+            "format": "int32"
           },
           "isActive": {
-            "type": "boolean",
-            "default": true
+            "type": "boolean"
           },
           "seoTitle": {
             "type": [
@@ -4333,27 +4299,24 @@
         }
       },
       "UpdateProductRequest": {
+        "required": [
+          "version",
+          "slug",
+          "shortDescription",
+          "description",
+          "isActive",
+          "isFeatured",
+          "seoTitle",
+          "seoDescription",
+          "categoryId",
+          "name",
+          "sku"
+        ],
         "type": "object",
         "properties": {
           "version": {
-            "type": [
-              "null",
-              "integer"
-            ],
+            "type": "integer",
             "format": "uint32"
-          },
-          "categoryId": {
-            "type": [
-              "null",
-              "string"
-            ],
-            "format": "uuid"
-          },
-          "name": {
-            "type": [
-              "null",
-              "string"
-            ]
           },
           "slug": {
             "type": [
@@ -4368,12 +4331,6 @@
             ]
           },
           "description": {
-            "type": [
-              "null",
-              "string"
-            ]
-          },
-          "sku": {
             "type": [
               "null",
               "string"
@@ -4396,6 +4353,16 @@
               "null",
               "string"
             ]
+          },
+          "categoryId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "sku": {
+            "type": "string"
           }
         }
       },
@@ -4432,42 +4399,32 @@
         }
       },
       "VariantRequest": {
+        "required": [
+          "name",
+          "sku",
+          "unitAmount",
+          "measurementUnit",
+          "regularPrice",
+          "discountPrice",
+          "isActive"
+        ],
         "type": "object",
         "properties": {
           "name": {
-            "type": [
-              "null",
-              "string"
-            ]
+            "type": "string"
           },
           "sku": {
-            "type": [
-              "null",
-              "string"
-            ]
+            "type": "string"
           },
           "unitAmount": {
-            "type": [
-              "null",
-              "number"
-            ],
+            "type": "number",
             "format": "double"
           },
           "measurementUnit": {
-            "oneOf": [
-              {
-                "type": "null"
-              },
-              {
-                "$ref": "#/components/schemas/MeasurementUnit"
-              }
-            ]
+            "$ref": "#/components/schemas/MeasurementUnit"
           },
           "regularPrice": {
-            "type": [
-              "null",
-              "number"
-            ],
+            "type": "number",
             "format": "double"
           },
           "discountPrice": {

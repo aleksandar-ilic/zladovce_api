@@ -99,12 +99,22 @@ export class ApiStack extends Stack {
         Auth__Cognito__ClientId: props.userPoolClientId,
         Media__BucketName: props.mediaBucket.bucketName,
         Media__BaseUrl: props.mediaBaseUrl,
+        Media__Region: this.region,
+        // Uploads are processed by the image processor Lambda (MediaStack); the attach endpoints wait
+        // up to Media__ReadyWaitSeconds for its result (validated to end before both timeouts).
+        Media__ProcessInline: 'false',
+        Media__ReadyWaitSeconds: String(config.api.mediaReadyWaitSeconds),
+        ...(config.api.maxOrderQuantity !== undefined
+          ? { Catalog__MaxOrderQuantity: String(config.api.maxOrderQuantity) }
+          : {}),
         ...corsEnvironment,
       },
       policyStatements: [
         // Database: IAM authentication as the application user only.
         database.appConnectStatement(db.appUser),
-        // Media: pre-sign uploads under uploads/, read and delete processed files under media/.
+        // Media: the pre-signed POST is signed with this role, so the browser upload is authorised by
+        // s3:PutObject on uploads/*. Attaching reads the manifest under media/; deleting an image (or
+        // archiving/replacing a category image) deletes its renditions under media/.
         new iam.PolicyStatement({
           sid: 'PresignUploads',
           actions: ['s3:PutObject'],
@@ -114,6 +124,15 @@ export class ApiStack extends Stack {
           sid: 'ReadAndDeleteMedia',
           actions: ['s3:GetObject', 's3:DeleteObject'],
           resources: [props.mediaBucket.arnForObjects(`${MEDIA_PREFIX}*`)],
+        }),
+        // "Manifest not written yet" must be a 404 (keep waiting / IMAGE_NOT_READY), not a 403 (error).
+        // S3 answers 404 for a missing object only to principals with s3:ListBucket on the bucket, and it
+        // evaluates that permission without an s3:prefix value, so a prefix condition would turn every
+        // 404 back into 403. Hence ListBucket on this one bucket, without a condition.
+        new iam.PolicyStatement({
+          sid: 'ListMediaBucket',
+          actions: ['s3:ListBucket'],
+          resources: [props.mediaBucket.bucketArn],
         }),
       ],
     });

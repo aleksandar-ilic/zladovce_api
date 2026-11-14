@@ -58,14 +58,21 @@ public class CatalogAdminTests : IDisposable
         Assert.Equal(first.GetProperty("slug").GetString() + "-2", second.GetProperty("slug").GetString());
 
         var duplicate = await _api.SendAsync(HttpMethod.Post, "/api/v1/admin/categories",
-            new { name = "Drugi", slug = first.GetProperty("slug").GetString() });
-        await ResponseAssertions.AssertProblemAsync(duplicate, HttpStatusCode.Conflict, "SLUG_TAKEN");
+            AdminApi.Category("Drugi", slug: first.GetProperty("slug").GetString()));
+        var problem = await ResponseAssertions.AssertProblemAsync(duplicate, HttpStatusCode.Conflict, "SLUG_TAKEN");
+        Assert.Equal(["slug"], problem.GetProperty("errors").EnumerateObject().Select(e => e.Name));
+
+        // Renaming another category to the taken slug is refused the same way.
+        var rename = await _api.SendAsync(HttpMethod.Put, $"/api/v1/admin/categories/{second.Id()}",
+            AdminApi.Category(name, slug: first.GetProperty("slug").GetString()));
+        problem = await ResponseAssertions.AssertProblemAsync(rename, HttpStatusCode.Conflict, "SLUG_TAKEN");
+        Assert.Equal(["slug"], problem.GetProperty("errors").EnumerateObject().Select(e => e.Name));
     }
 
     [Fact]
     public async Task Category_validation_errors_are_reported_per_field()
     {
-        var response = await _api.SendAsync(HttpMethod.Post, "/api/v1/admin/categories", new { name = "", slug = "Loš Slug", sortOrder = -1 });
+        var response = await _api.SendAsync(HttpMethod.Post, "/api/v1/admin/categories", AdminApi.Category("", slug: "Loš Slug", sortOrder: -1));
 
         var body = await ResponseAssertions.AssertProblemAsync(response, HttpStatusCode.BadRequest, "VALIDATION_FAILED");
         var errors = body.GetProperty("errors");
@@ -83,6 +90,7 @@ public class CatalogAdminTests : IDisposable
             name = "Novi naziv",
             slug = (string?)null,
             description = "Opis",
+            imageKey = (string?)null,
             sortOrder = 7,
             isActive = false,
             seoTitle = "SEO naslov",
@@ -95,7 +103,7 @@ public class CatalogAdminTests : IDisposable
         Assert.False(updated.GetProperty("isActive").GetBoolean());
         Assert.Equal("SEO naslov", updated.GetProperty("seoTitle").GetString());
 
-        var missing = await _api.SendAsync(HttpMethod.Put, $"/api/v1/admin/categories/{Guid.CreateVersion7()}", new { name = "x" });
+        var missing = await _api.SendAsync(HttpMethod.Put, $"/api/v1/admin/categories/{Guid.CreateVersion7()}", AdminApi.Category("x"));
         await ResponseAssertions.AssertProblemAsync(missing, HttpStatusCode.NotFound, "NOT_FOUND");
     }
 
@@ -218,15 +226,18 @@ public class CatalogAdminTests : IDisposable
 
         var duplicateVariantSku = await _api.SendAsync(HttpMethod.Post, "/api/v1/admin/products",
             new { categoryId = category.Id(), name = "y", sku = $"Y-{Unique.Token()}", variants = new[] { AdminApi.Variant(existingVariantSku) } });
-        await ResponseAssertions.AssertProblemAsync(duplicateVariantSku, HttpStatusCode.Conflict, "SKU_TAKEN");
+        problem = await ResponseAssertions.AssertProblemAsync(duplicateVariantSku, HttpStatusCode.Conflict, "SKU_TAKEN");
+        Assert.Equal(["variants[0].sku"], problem.GetProperty("errors").EnumerateObject().Select(e => e.Name));
 
         var duplicateProductSku = await _api.SendAsync(HttpMethod.Post, "/api/v1/admin/products",
             new { categoryId = category.Id(), name = "z", sku = existing.GetProperty("sku").GetString(), variants = new[] { AdminApi.Variant($"V-{Unique.Token()}") } });
-        await ResponseAssertions.AssertProblemAsync(duplicateProductSku, HttpStatusCode.Conflict, "SKU_TAKEN");
+        problem = await ResponseAssertions.AssertProblemAsync(duplicateProductSku, HttpStatusCode.Conflict, "SKU_TAKEN");
+        Assert.Equal(["sku"], problem.GetProperty("errors").EnumerateObject().Select(e => e.Name));
 
         var duplicateSlug = await _api.SendAsync(HttpMethod.Post, "/api/v1/admin/products",
             new { categoryId = category.Id(), name = "z", slug = existing.GetProperty("slug").GetString(), sku = $"Z-{Unique.Token()}", variants = new[] { AdminApi.Variant($"V-{Unique.Token()}") } });
-        await ResponseAssertions.AssertProblemAsync(duplicateSlug, HttpStatusCode.Conflict, "SLUG_TAKEN");
+        problem = await ResponseAssertions.AssertProblemAsync(duplicateSlug, HttpStatusCode.Conflict, "SLUG_TAKEN");
+        Assert.Equal(["slug"], problem.GetProperty("errors").EnumerateObject().Select(e => e.Name));
 
         var unknownUnit = await _api.SendAsync(HttpMethod.Post, "/api/v1/admin/products",
             new { categoryId = category.Id(), name = "z", sku = $"Z-{Unique.Token()}", variants = new[] { new { name = "x", sku = $"V-{Unique.Token()}", unitAmount = 1, measurementUnit = "lb", regularPrice = 1 } } });
@@ -294,11 +305,14 @@ public class CatalogAdminTests : IDisposable
         {
             categoryId = category.Id(),
             name,
+            slug = (string?)null,
             sku = product.GetProperty("sku").GetString(),
             shortDescription = "Novo",
             description = "<p>Novo</p>",
             isActive = true,
             isFeatured = true,
+            seoTitle = (string?)null,
+            seoDescription = (string?)null,
             version = v,
         };
 
@@ -356,7 +370,138 @@ public class CatalogAdminTests : IDisposable
         }, HttpStatusCode.Created);
 
         var restore = await _api.SendAsync(HttpMethod.Post, $"/api/v1/admin/products/{product.Id()}/restore");
-        await ResponseAssertions.AssertProblemAsync(restore, HttpStatusCode.Conflict, "SLUG_TAKEN");
+        var problem = await ResponseAssertions.AssertProblemAsync(restore, HttpStatusCode.Conflict, "SLUG_TAKEN");
+        Assert.True(problem.GetProperty("errors").TryGetProperty("slug", out _));
+    }
+
+    [Fact]
+    public async Task Sku_conflicts_point_at_every_taken_variant_by_its_index_in_the_request()
+    {
+        var category = await _api.CreateCategoryAsync();
+        var token = Unique.Token();
+        var existing = await _api.CreateProductAsync(category.Id(), variants:
+            [AdminApi.Variant($"T1-{token}"), AdminApi.Variant($"T2-{token}", name: "720 g")]);
+
+        var response = await _api.SendAsync(HttpMethod.Post, "/api/v1/admin/products", new
+        {
+            categoryId = category.Id(),
+            name = "Novi",
+            sku = $"NEW-{token}",
+            variants = new[]
+            {
+                AdminApi.Variant($"FREE-{token}"),
+                AdminApi.Variant($"T2-{token}", name: "720 g"),
+                AdminApi.Variant($"T1-{token}", name: "1 kg"),
+            },
+        });
+
+        var problem = await ResponseAssertions.AssertProblemAsync(response, HttpStatusCode.Conflict, "SKU_TAKEN");
+        var errors = problem.GetProperty("errors");
+        Assert.Equal(["variants[1].sku", "variants[2].sku"], errors.EnumerateObject().Select(e => e.Name).Order());
+        Assert.Contains($"T2-{token}", errors.GetProperty("variants[1].sku")[0].GetString());
+
+        // Nothing was created.
+        var listed = await _api.GetAsync($"/api/v1/admin/products?q=NEW-{token}");
+        Assert.Empty(listed.Items());
+
+        // Base SKU on update and variant SKU on add both point at "sku".
+        var other = await _api.CreateProductAsync(category.Id());
+        var update = await _api.SendAsync(HttpMethod.Put, $"/api/v1/admin/products/{other.Id()}", new
+        {
+            categoryId = category.Id(),
+            name = "x",
+            slug = (string?)null,
+            shortDescription = (string?)null,
+            description = (string?)null,
+            sku = existing.GetProperty("sku").GetString(),
+            isActive = true,
+            isFeatured = false,
+            seoTitle = (string?)null,
+            seoDescription = (string?)null,
+            version = other.GetProperty("version").GetUInt32(),
+        });
+        problem = await ResponseAssertions.AssertProblemAsync(update, HttpStatusCode.Conflict, "SKU_TAKEN");
+        Assert.Equal(["sku"], problem.GetProperty("errors").EnumerateObject().Select(e => e.Name));
+
+        var add = await _api.SendAsync(HttpMethod.Post, $"/api/v1/admin/products/{other.Id()}/variants", AdminApi.Variant($"T1-{token}"));
+        problem = await ResponseAssertions.AssertProblemAsync(add, HttpStatusCode.Conflict, "SKU_TAKEN");
+        Assert.Equal(["sku"], problem.GetProperty("errors").EnumerateObject().Select(e => e.Name));
+    }
+
+    // ---------------- Required members ("send every field") ----------------
+
+    [Fact]
+    public async Task Missing_required_members_are_validation_errors_with_their_field_paths()
+    {
+        var category = await _api.CreateCategoryAsync();
+        var product = await _api.CreateProductAsync(category.Id());
+        var variant = product.GetProperty("variants")[0];
+
+        // Product update replaces every value: an omitted isFeatured or seoTitle is no longer silently reset.
+        var update = await _api.SendAsync(HttpMethod.Put, $"/api/v1/admin/products/{product.Id()}", new
+        {
+            categoryId = category.Id(),
+            name = "x",
+            sku = product.GetProperty("sku").GetString(),
+            isActive = true,
+            version = product.GetProperty("version").GetUInt32(),
+        });
+        var problem = await ResponseAssertions.AssertProblemAsync(update, HttpStatusCode.BadRequest, "VALIDATION_FAILED");
+        Assert.Equal(
+            ["description", "isFeatured", "seoDescription", "seoTitle", "shortDescription", "slug"],
+            problem.GetProperty("errors").EnumerateObject().Select(e => e.Name).Order());
+        Assert.Equal(
+            product.GetProperty("name").GetString(),
+            (await _api.GetAsync($"/api/v1/admin/products/{product.Id()}")).GetProperty("name").GetString());
+
+        // Nested variants of a new product: the path carries the index; validator messages are not repeated for those fields.
+        var create = await _api.SendAsync(HttpMethod.Post, "/api/v1/admin/products", new
+        {
+            categoryId = category.Id(),
+            name = "y",
+            sku = $"REQ-{Unique.Token()}",
+            variants = new object[]
+            {
+                AdminApi.Variant($"RV-{Unique.Token()}"),
+                new { name = "1 kg", sku = $"RV-{Unique.Token()}", unitAmount = 1, measurementUnit = "kg", regularPrice = 900 },
+            },
+        });
+        problem = await ResponseAssertions.AssertProblemAsync(create, HttpStatusCode.BadRequest, "VALIDATION_FAILED");
+        var errors = problem.GetProperty("errors");
+        Assert.Equal(
+            ["variants[1].discountPrice", "variants[1].initialStock", "variants[1].isActive", "variants[1].lowStockThreshold"],
+            errors.EnumerateObject().Select(e => e.Name).Order());
+        Assert.Single(errors.GetProperty("variants[1].isActive").EnumerateArray());
+
+        // An empty body lists everything that must be sent.
+        var empty = await _api.SendAsync(HttpMethod.Put, $"/api/v1/admin/products/{product.Id()}/variants/{variant.Id()}", new { });
+        problem = await ResponseAssertions.AssertProblemAsync(empty, HttpStatusCode.BadRequest, "VALIDATION_FAILED");
+        Assert.Equal(
+            ["discountPrice", "isActive", "measurementUnit", "name", "regularPrice", "sku", "unitAmount"],
+            problem.GetProperty("errors").EnumerateObject().Select(e => e.Name).Order());
+
+        // Category: omitting imageKey no longer removes the image silently (null is still accepted, see the media tests).
+        var categoryUpdate = await _api.SendAsync(HttpMethod.Put, $"/api/v1/admin/categories/{category.Id()}", new
+        {
+            name = "z",
+            slug = (string?)null,
+            description = (string?)null,
+            sortOrder = 1,
+            isActive = true,
+            seoTitle = (string?)null,
+            seoDescription = (string?)null,
+        });
+        problem = await ResponseAssertions.AssertProblemAsync(categoryUpdate, HttpStatusCode.BadRequest, "VALIDATION_FAILED");
+        Assert.Equal(["imageKey"], problem.GetProperty("errors").EnumerateObject().Select(e => e.Name));
+
+        // Image order without mainImageId, alt text without altText.
+        var order = await _api.SendAsync(HttpMethod.Put, $"/api/v1/admin/products/{product.Id()}/images/order", new { imageIds = Array.Empty<Guid>() });
+        problem = await ResponseAssertions.AssertProblemAsync(order, HttpStatusCode.BadRequest, "VALIDATION_FAILED");
+        Assert.Equal(["mainImageId"], problem.GetProperty("errors").EnumerateObject().Select(e => e.Name));
+
+        var alt = await _api.SendAsync(HttpMethod.Put, $"/api/v1/admin/products/{product.Id()}/images/{Guid.CreateVersion7()}", new { });
+        problem = await ResponseAssertions.AssertProblemAsync(alt, HttpStatusCode.BadRequest, "VALIDATION_FAILED");
+        Assert.Equal(["altText"], problem.GetProperty("errors").EnumerateObject().Select(e => e.Name));
     }
 
     // ---------------- Variants ----------------
@@ -397,8 +542,11 @@ public class CatalogAdminTests : IDisposable
             unitAmount = 1,
             measurementUnit = "kg",
             regularPrice = 950,
+            discountPrice = (decimal?)null,
+            isActive = true,
         });
-        await ResponseAssertions.AssertProblemAsync(duplicate, HttpStatusCode.Conflict, "SKU_TAKEN");
+        var duplicateProblem = await ResponseAssertions.AssertProblemAsync(duplicate, HttpStatusCode.Conflict, "SKU_TAKEN");
+        Assert.Equal(["sku"], duplicateProblem.GetProperty("errors").EnumerateObject().Select(e => e.Name));
 
         // Deactivate the first: allowed, the second stays active.
         await _api.JsonAsync(HttpMethod.Put, $"/api/v1/admin/products/{product.Id()}/variants/{firstId}", new
@@ -408,6 +556,7 @@ public class CatalogAdminTests : IDisposable
             unitAmount = 370,
             measurementUnit = "g",
             regularPrice = 500,
+            discountPrice = (decimal?)null,
             isActive = false,
         });
 
@@ -422,6 +571,7 @@ public class CatalogAdminTests : IDisposable
             unitAmount = 1,
             measurementUnit = "kg",
             regularPrice = 950,
+            discountPrice = (decimal?)null,
             isActive = false,
         });
         await ResponseAssertions.AssertProblemAsync(deactivate, HttpStatusCode.Conflict, "LAST_ACTIVE_VARIANT");
@@ -445,8 +595,14 @@ public class CatalogAdminTests : IDisposable
         {
             categoryId = category.Id(),
             name = product.GetProperty("name").GetString(),
+            slug = (string?)null,
+            shortDescription = (string?)null,
+            description = (string?)null,
             sku = product.GetProperty("sku").GetString(),
             isActive = true,
+            isFeatured = false,
+            seoTitle = (string?)null,
+            seoDescription = (string?)null,
             version = product.GetProperty("version").GetUInt32(),
         });
         await ResponseAssertions.AssertProblemAsync(activate, HttpStatusCode.Conflict, "NO_ACTIVE_VARIANT");
@@ -464,10 +620,14 @@ public class CatalogAdminTests : IDisposable
         {
             categoryId = category.Id(),
             name = "Audit naziv",
+            slug = (string?)null,
             sku = product.GetProperty("sku").GetString(),
             shortDescription = "Kratak opis",
             description = "<p>Opis</p>",
             isActive = true,
+            isFeatured = false,
+            seoTitle = (string?)null,
+            seoDescription = (string?)null,
             version = product.GetProperty("version").GetUInt32(),
         });
         await _api.JsonAsync(HttpMethod.Post, $"/api/v1/admin/products/{product.Id()}/archive");

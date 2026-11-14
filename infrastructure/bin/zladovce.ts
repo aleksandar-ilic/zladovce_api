@@ -10,7 +10,7 @@ import { createZladovceEnvironment } from '../lib/zladovce-environment';
  *   npx cdk deploy --all -c env=staging -c requireArtifacts=true
  *
  * Optional context: account, region, natMode, useRdsProxy, apiAssetPath,
- * migrationAssetPath, alarmEmail, requireArtifacts, nag.
+ * lambdaAssetPath (or the former migrationAssetPath), alarmEmail, requireArtifacts, nag.
  */
 const app = new App();
 

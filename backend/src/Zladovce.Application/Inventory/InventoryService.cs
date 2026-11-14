@@ -169,13 +169,7 @@ public sealed class InventoryService(
                 || EF.Functions.Like(DbSearch.Unaccent(r.Sku).ToLower(), DbSearch.Unaccent(pattern).ToLower()));
         }
 
-        query = criteria.Status switch
-        {
-            StockStatus.Out => query.Where(r => r.QuantityOnHand <= 0),
-            StockStatus.Low => query.Where(r => r.QuantityOnHand > 0 && r.QuantityOnHand <= r.LowStockThreshold),
-            StockStatus.Ok => query.Where(r => r.QuantityOnHand > r.LowStockThreshold && r.QuantityOnHand > 0),
-            _ => query,
-        };
+        query = WhereStatusIn(query, criteria.Statuses);
 
         var total = await query.CountAsync(cancellationToken);
 
@@ -227,7 +221,8 @@ public sealed class InventoryService(
 
     public async Task<LowStockResponse> GetLowStockAsync(int limit, CancellationToken cancellationToken)
     {
-        var query = Rows().Where(r => r.QuantityOnHand <= r.LowStockThreshold);
+        // Same filter as GET /admin/inventory?status=low,out, so the card and the linked list always agree.
+        var query = WhereStatusIn(Rows(), InventoryStatusFilter.LowStock);
         var total = await query.CountAsync(cancellationToken);
         var rows = await query
             .OrderBy(r => r.QuantityOnHand).ThenBy(r => r.ProductName).ThenBy(r => r.VariantSortOrder).ThenBy(r => r.VariantId)
@@ -360,6 +355,25 @@ public sealed class InventoryService(
             IsActive = product.IsActive && variant.IsActive,
             UpdatedAt = item.UpdatedAt,
         };
+
+    /// <summary>Rows whose status (<see cref="StockRules.StatusOf"/>) is one of <paramref name="statuses"/>; empty = no filter.</summary>
+    private static IQueryable<Row> WhereStatusIn(IQueryable<Row> query, IReadOnlySet<StockStatus> statuses)
+    {
+        var ok = statuses.Contains(StockStatus.Ok);
+        var low = statuses.Contains(StockStatus.Low);
+        var @out = statuses.Contains(StockStatus.Out);
+
+        if (statuses.Count == 0 || (ok && low && @out))
+        {
+            return query;
+        }
+
+        // Mirrors StockRules.StatusOf: out = nothing on stock, low = at or below the threshold, ok = above it.
+        return query.Where(r =>
+            (@out && r.QuantityOnHand <= 0)
+            || (low && r.QuantityOnHand > 0 && r.QuantityOnHand <= r.LowStockThreshold)
+            || (ok && r.QuantityOnHand > 0 && r.QuantityOnHand > r.LowStockThreshold));
+    }
 
     private static InventoryItemResponse ToResponse(Row row) => new(
         row.VariantId,

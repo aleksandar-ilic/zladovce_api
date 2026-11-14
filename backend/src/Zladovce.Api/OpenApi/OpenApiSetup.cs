@@ -1,6 +1,11 @@
+using System.Reflection;
+using System.Text.Json.Serialization.Metadata;
+using FluentValidation;
+using FluentValidation.Validators;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.OpenApi;
 using Microsoft.OpenApi;
+using Zladovce.Api.Validation;
 
 namespace Zladovce.Api.OpenApi;
 
@@ -20,7 +25,10 @@ public static class OpenApiSetup
                     Version = "v1",
                     Description =
                         "API of the Zladovce shop. Errors are RFC 9457 Problem Details with a stable `code` and Serbian text. " +
-                        "Endpoints under /api/v1/admin require an Amazon Cognito access token.",
+                        "Endpoints under /api/v1/admin require an Amazon Cognito access token. " +
+                        "Request members listed as `required` must be sent (a nullable one may be null); a missing member gives " +
+                        "400 VALIDATION_FAILED with the field in `errors`. 409 SLUG_TAKEN and SKU_TAKEN also carry `errors` " +
+                        "pointing at the field (`slug`, `sku`, `variants[i].sku`).",
                 };
 
                 document.Components ??= new OpenApiComponents();
@@ -38,6 +46,8 @@ public static class OpenApiSetup
                 return Task.CompletedTask;
             });
 
+            options.AddSchemaTransformer(RequestSchemas.ApplyRequiredMembersAsync);
+
             options.AddOperationTransformer((operation, context, _) =>
             {
                 var metadata = context.Description.ActionDescriptor.EndpointMetadata;
@@ -54,4 +64,83 @@ public static class OpenApiSetup
                 return Task.CompletedTask;
             });
         });
+}
+
+/// <summary>
+/// Makes the request schemas say what the server enforces, so that generated client types are not all optional:
+/// <list type="bullet">
+/// <item>members declared with the C# <c>required</c> keyword are listed in <c>required</c> (they must be sent;
+/// <see cref="RequiredMembers"/> rejects a missing one with 400 <c>VALIDATION_FAILED</c>);</item>
+/// <item>a nullable member whose validator has a <c>NotNull</c> / <c>NotEmpty</c> rule is documented as not nullable
+/// (sending <c>null</c> gives 400 <c>VALIDATION_FAILED</c>).</item>
+/// </list>
+/// </summary>
+internal static class RequestSchemas
+{
+    public static Task ApplyRequiredMembersAsync(OpenApiSchema schema, OpenApiSchemaTransformerContext context, CancellationToken cancellationToken)
+    {
+        var typeInfo = context.JsonTypeInfo;
+        if (context.JsonPropertyInfo is not null || typeInfo.Kind != JsonTypeInfoKind.Object || schema.Properties is null)
+        {
+            return Task.CompletedTask;
+        }
+
+        foreach (var property in typeInfo.Properties.Where(RequiredMembers.IsRequiredMember))
+        {
+            schema.Required ??= new HashSet<string>(StringComparer.Ordinal);
+            schema.Required.Add(property.Name);
+        }
+
+        if (!RequiredMembers.IsRequestModel(typeInfo.Type))
+        {
+            return Task.CompletedTask;
+        }
+
+        using var scope = context.ApplicationServices.CreateScope();
+        if (scope.ServiceProvider.GetService(typeof(IValidator<>).MakeGenericType(typeInfo.Type)) is not IValidator validator)
+        {
+            return Task.CompletedTask;
+        }
+
+        var descriptor = validator.CreateDescriptor();
+        foreach (var property in typeInfo.Properties)
+        {
+            if (property.AttributeProvider is not MemberInfo member
+                || !schema.Properties.TryGetValue(property.Name, out var propertySchema)
+                || !descriptor.GetRulesForMember(member.Name)
+                    .SelectMany(rule => rule.Components)
+                    .Any(component => component.Validator is INotNullValidator or INotEmptyValidator))
+            {
+                continue;
+            }
+
+            schema.Properties[property.Name] = WithoutNull(propertySchema);
+        }
+
+        return Task.CompletedTask;
+    }
+
+    private static IOpenApiSchema WithoutNull(IOpenApiSchema propertySchema)
+    {
+        if (propertySchema is not OpenApiSchema inline)
+        {
+            return propertySchema;
+        }
+
+        if (inline.Type is { } type && type.HasFlag(JsonSchemaType.Null))
+        {
+            inline.Type = type & ~JsonSchemaType.Null;
+        }
+
+        // A nullable property that refers to another schema (enum, object) is marked here and becomes oneOf [null, $ref] later.
+        inline.Metadata?.Remove("x-is-nullable-property");
+
+        // A nullable reference to another schema is written as oneOf [null, $ref]; keep the reference only.
+        if (inline.OneOf is { Count: 2 } oneOf && oneOf.Count(s => s.Type == JsonSchemaType.Null) == 1)
+        {
+            return oneOf.Single(s => s.Type != JsonSchemaType.Null);
+        }
+
+        return inline;
+    }
 }

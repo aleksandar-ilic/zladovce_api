@@ -34,8 +34,10 @@ export interface ZladovceEnvironment {
  *   Network  <- Database <- Api <- Observability
  *   Auth     <------------- Api <- Frontend (optional)
  *   Media    <------------- Api
+ *   Media    <------------------- Observability (image processor function and dead-letter queue)
  *
- * so there are no cyclic cross-stack references.
+ * so there are no cyclic cross-stack references. The image processor and its S3 trigger are inside
+ * the Media stack for exactly that reason (see MediaStack).
  */
 export function createZladovceEnvironment(
   app: App,
@@ -74,8 +76,9 @@ export function createZladovceEnvironment(
 
   const media = new MediaStack(app, stackName('Media'), {
     ...common,
-    description: `Zladovce ${config.envName}: media bucket and CloudFront`,
+    description: `Zladovce ${config.envName}: media bucket, CloudFront and image processor`,
     config,
+    requireArtifacts: options.requireArtifacts ?? false,
   });
 
   const migrations = new MigrationStack(app, stackName('Migrations'), {
@@ -110,6 +113,8 @@ export function createZladovceEnvironment(
     httpApi: api.httpApi,
     apiFunction: api.apiFunction.function,
     migrationFunction: migrations.migrationFunction.function,
+    imageProcessorFunction: media.imageProcessor.function,
+    imageProcessorDeadLetterQueue: media.imageProcessorDeadLetterQueue,
     databaseInstance: database.instance,
     natInstanceIds: network.natInstanceIds,
   });

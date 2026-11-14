@@ -2,12 +2,18 @@ import { CfnOutput, Duration, RemovalPolicy, Stack, StackProps } from 'aws-cdk-l
 import * as acm from 'aws-cdk-lib/aws-certificatemanager';
 import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
 import * as iam from 'aws-cdk-lib/aws-iam';
+import * as lambdaDestinations from 'aws-cdk-lib/aws-lambda-destinations';
 import * as s3 from 'aws-cdk-lib/aws-s3';
+import * as s3n from 'aws-cdk-lib/aws-s3-notifications';
+import * as sqs from 'aws-cdk-lib/aws-sqs';
 import { Construct } from 'constructs';
-import { EnvironmentConfig, MEDIA_PREFIX, UPLOADS_PREFIX } from '../config';
+import { EnvironmentConfig, MEDIA_PREFIX, resourcePrefix, UPLOADS_PREFIX } from '../config';
+import { DotnetFunction } from '../constructs/dotnet-function';
 
 export interface MediaStackProps extends StackProps {
   readonly config: EnvironmentConfig;
+  /** `-c requireArtifacts=true`: fail when the backend artifact of the image processor is missing. */
+  readonly requireArtifacts: boolean;
 }
 
 /**
@@ -30,17 +36,26 @@ class MediaBucketOrigin extends cloudfront.OriginBase {
 }
 
 /**
- * Private media bucket + CloudFront distribution.
+ * Private media bucket + CloudFront distribution + image processor.
  *
  *   uploads/  - raw admin uploads through pre-signed POST; expire after 1 day; never served
  *   media/    - processed renditions; the only prefix CloudFront can read
  *
- * Extension point (later phase): the image processor Lambda subscribes to
- * `uploads/` object-created events on `this.bucket`.
+ * The image processor Lambda (Zladovce.Lambda ImageProcessorFunction) is triggered by
+ * `s3:ObjectCreated:*` under `uploads/`, writes WebP renditions and a manifest to `media/`
+ * and deletes the upload. It lives in THIS stack on purpose: a bucket notification to a
+ * function in another stack needs references in both directions (the notification refers
+ * to the function, the invoke permission refers to the bucket), which is a cyclic
+ * cross-stack dependency. With bucket, function, permission, notification and dead-letter
+ * queue in one stack there are no cross-stack references at all; the Observability stack
+ * (further down) reads the function and the queue.
  */
 export class MediaStack extends Stack {
   public readonly bucket: s3.Bucket;
   public readonly distribution: cloudfront.Distribution;
+  public readonly imageProcessor: DotnetFunction;
+  /** Events the image processor still failed after its retries (Lambda on-failure destination). */
+  public readonly imageProcessorDeadLetterQueue: sqs.Queue;
   /** Public base URL of media, without trailing slash. Object URL = `${mediaBaseUrl}/media/...`. */
   public readonly mediaBaseUrl: string;
 
@@ -72,8 +87,8 @@ export class MediaStack extends Stack {
       ],
       cors: [
         {
-          // Browser uploads with a pre-signed POST/PUT - admin application only.
-          allowedMethods: [s3.HttpMethods.PUT, s3.HttpMethods.POST],
+          // Browser uploads with a pre-signed POST (multipart form) - admin application only.
+          allowedMethods: [s3.HttpMethods.POST],
           allowedOrigins: config.cors.adminOrigins,
           allowedHeaders: ['*'],
           exposedHeaders: ['ETag'],
@@ -181,6 +196,65 @@ export class MediaStack extends Stack {
 
     this.mediaBaseUrl = `https://${customDomain?.domainName ?? this.distribution.distributionDomainName}`;
 
+    /* ------------------------------ Image processor ----------------------------- */
+
+    const prefix = resourcePrefix(config);
+
+    this.imageProcessorDeadLetterQueue = new sqs.Queue(this, 'ImageProcessorDeadLetterQueue', {
+      queueName: `${prefix}-image-processor-dlq`,
+      retentionPeriod: Duration.days(media.deadLetterRetentionDays),
+      encryption: sqs.QueueEncryption.SQS_MANAGED,
+      enforceSSL: true,
+    });
+
+    this.imageProcessor = new DotnetFunction(this, 'ImageProcessor', {
+      functionName: `${prefix}-image-processor`,
+      description: `Zladovce ${config.envName} image processor (S3 uploads/ -> WebP renditions in media/)`,
+      handler: config.api.imageProcessorHandler,
+      assetPath: config.api.lambdaAssetPath,
+      requireArtifacts: props.requireArtifacts,
+      memoryMb: media.processorMemoryMb,
+      timeout: Duration.seconds(media.processorTimeoutSeconds),
+      logRetentionDays: config.api.logRetentionDays,
+      retainLogs: config.isProduction,
+      // Not in the VPC: it needs S3 only (no database), and outside the VPC it needs no NAT or ENIs.
+      environment: {
+        Media__BucketName: this.bucket.bucketName,
+        Media__Region: this.region,
+      },
+      policyStatements: [
+        new iam.PolicyStatement({
+          sid: 'ReadAndRemoveUploads',
+          actions: ['s3:GetObject', 's3:DeleteObject'],
+          resources: [this.bucket.arnForObjects(`${UPLOADS_PREFIX}*`)],
+        }),
+        new iam.PolicyStatement({
+          sid: 'WriteAndReadRenditions',
+          actions: ['s3:PutObject', 's3:GetObject'],
+          resources: [this.bucket.arnForObjects(`${MEDIA_PREFIX}*`)],
+        }),
+        // Without s3:ListBucket a missing object answers 403 instead of 404, and the processor
+        // could not tell "no manifest yet" from "access denied". S3 evaluates this permission for
+        // GetObject/HeadObject without an s3:prefix value, so it cannot be limited by prefix; it is
+        // limited to this one bucket.
+        new iam.PolicyStatement({
+          sid: 'ListMediaBucket',
+          actions: ['s3:ListBucket'],
+          resources: [this.bucket.bucketArn],
+        }),
+      ],
+      onFailure: new lambdaDestinations.SqsDestination(this.imageProcessorDeadLetterQueue),
+      retryAttempts: media.processorRetryAttempts,
+      maxEventAge: Duration.hours(1),
+    });
+
+    // Every new object under uploads/ (pre-signed POST = ObjectCreated:Post). The processor ignores other keys.
+    this.bucket.addEventNotification(
+      s3.EventType.OBJECT_CREATED,
+      new s3n.LambdaDestination(this.imageProcessor.function),
+      { prefix: UPLOADS_PREFIX },
+    );
+
     new CfnOutput(this, 'MediaBucketName', { value: this.bucket.bucketName, description: 'Private media bucket' });
     new CfnOutput(this, 'MediaDistributionDomainName', {
       value: this.distribution.distributionDomainName,
@@ -188,5 +262,10 @@ export class MediaStack extends Stack {
     });
     new CfnOutput(this, 'MediaDistributionId', { value: this.distribution.distributionId });
     new CfnOutput(this, 'MediaBaseUrl', { value: this.mediaBaseUrl });
+    new CfnOutput(this, 'ImageProcessorFunctionName', { value: this.imageProcessor.function.functionName });
+    new CfnOutput(this, 'ImageProcessorDeadLetterQueueUrl', {
+      value: this.imageProcessorDeadLetterQueue.queueUrl,
+      description: 'Upload events the image processor could not handle (inspect, then redrive or delete)',
+    });
   }
 }

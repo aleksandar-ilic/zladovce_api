@@ -121,7 +121,19 @@ public sealed class AdminApi(HttpClient client, string email = "katalog.owner@ex
 
     public async Task<JsonElement> CreateCategoryAsync(string? name = null, bool isActive = true, string? slug = null) =>
         await JsonAsync(HttpMethod.Post, "/api/v1/admin/categories",
-            new { name = name ?? $"Kategorija {Unique.Token()}", slug, isActive }, HttpStatusCode.Created);
+            Category(name ?? $"Kategorija {Unique.Token()}", slug: slug, isActive: isActive), HttpStatusCode.Created);
+
+    /// <summary>A complete category body (create and update require every member).</summary>
+    public static object Category(
+        string name,
+        string? slug = null,
+        string? imageKey = null,
+        bool isActive = true,
+        int sortOrder = 0,
+        string? description = null,
+        string? seoTitle = null,
+        string? seoDescription = null) =>
+        new { name, slug, description, imageKey, sortOrder, isActive, seoTitle, seoDescription };
 
     public static object Variant(string sku, decimal price = 500m, decimal? discount = null, int stock = 10, int threshold = 2, bool isActive = true, string name = "370 g") =>
         new { name, sku, unitAmount = 370m, measurementUnit = "g", regularPrice = price, discountPrice = discount, isActive, initialStock = stock, lowStockThreshold = threshold };

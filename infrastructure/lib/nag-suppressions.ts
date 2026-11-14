@@ -113,18 +113,27 @@ export function applyNagSuppressions(environment: ZladovceEnvironment): void {
         'changed. TLSv1.2_2021 is applied as soon as domains.media is configured.',
     );
   }
-  if (config.media.autoDeleteObjects && !config.media.retainOnDelete) {
-    acknowledge(
-      media,
-      'AwsSolutions-IAM4[Policy::arn:<AWS::Partition>:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole]',
-      'Role of the CDK-owned auto-delete-objects custom resource (throw-away environments only).',
-    );
+  const autoDelete = config.media.autoDeleteObjects && !config.media.retainOnDelete;
+  acknowledge(
+    media,
+    'AwsSolutions-IAM4[Policy::arn:<AWS::Partition>:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole]',
+    'Roles of CDK-owned custom resources: the bucket-notifications handler that subscribes the image processor to ' +
+      'uploads/ (S3 notifications to a Lambda need it to avoid a bucket/permission dependency cycle)' +
+      (autoDelete ? ', and the auto-delete-objects resource (throw-away environments only).' : '.'),
+  );
+  if (autoDelete) {
     acknowledge(
       media,
       'AwsSolutions-L1',
       'Runtime of the CDK-owned auto-delete-objects custom resource is chosen by aws-cdk-lib.',
     );
   }
+  acknowledge(
+    media.imageProcessorDeadLetterQueue,
+    'AwsSolutions-SQS3',
+    'This queue is itself the dead-letter destination (Lambda on-failure destination) of the image processor; ' +
+      'a dead-letter queue of the dead-letter queue adds nothing. Messages are kept 14 days and alarmed on.',
+  );
 
   /* ----------------------------------- API ----------------------------------- */
 
@@ -147,6 +156,9 @@ export function applyNagSuppressions(environment: ZladovceEnvironment): void {
       'AwsSolutions-IAM5[Resource::*]',
       'Lambda VPC networking (ec2:CreateNetworkInterface etc.) does not support resource-level permissions.',
     );
+  }
+  // The image processor runs outside the VPC and therefore has no Resource::* statement.
+  for (const fn of [api.apiFunction, migrations.migrationFunction, media.imageProcessor]) {
     acknowledge(
       fn.role,
       `AwsSolutions-IAM5[Resource::arn:aws:logs:${config.region}:<AWS::AccountId>:log-group:/aws/lambda/${fn.functionName}:*]`,
@@ -162,6 +174,18 @@ export function applyNagSuppressions(environment: ZladovceEnvironment): void {
     api.apiFunction.role,
     `AwsSolutions-IAM5[Resource::${mediaBucketArnExport}/${MEDIA_PREFIX}*]`,
     'Object-level access limited to the media/ prefix of the media bucket (read and delete processed images).',
+  );
+
+  // The image processor is in the same stack as the bucket, so the ARN is a local reference.
+  acknowledge(
+    media.imageProcessor.role,
+    `AwsSolutions-IAM5[Resource::<MediaBucketBCBB02BA.Arn>/${UPLOADS_PREFIX}*]`,
+    'Object-level access limited to the uploads/ prefix (read the new upload, delete it once processed).',
+  );
+  acknowledge(
+    media.imageProcessor.role,
+    `AwsSolutions-IAM5[Resource::<MediaBucketBCBB02BA.Arn>/${MEDIA_PREFIX}*]`,
+    'Object-level access limited to the media/ prefix (write renditions and the manifest, read the manifest).',
   );
 
 }

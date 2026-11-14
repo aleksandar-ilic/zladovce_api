@@ -107,5 +107,10 @@ public static class SlugAllocator
         throw SlugTaken();
     }
 
-    public static ConflictException SlugTaken() => new(ErrorTexts.SlugTakenDetail, ErrorCodes.SlugTaken, ErrorTexts.SlugTakenTitle);
+    /// <summary>409 <c>SLUG_TAKEN</c> with <c>errors.slug</c>.</summary>
+    public static ConflictException SlugTaken() => new(
+        ErrorTexts.SlugTakenDetail,
+        ErrorCodes.SlugTaken,
+        ErrorTexts.SlugTakenTitle,
+        new Dictionary<string, string[]> { ["slug"] = [ErrorTexts.SlugTakenDetail] });
 }

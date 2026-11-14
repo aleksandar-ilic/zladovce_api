@@ -6,110 +6,154 @@ using Zladovce.Domain.Inventory;
 
 namespace Zladovce.Application.Catalog;
 
-/// <summary>Values of a variant (body of variant update; also the base of variant creation).</summary>
+/// <summary>
+/// Values of a variant (body of variant update; also the base of variant creation). Every member marked <c>required</c>
+/// must be present in the JSON (nullable ones may be <c>null</c>); a missing member gives 400 <c>VALIDATION_FAILED</c>.
+/// </summary>
 public record VariantRequest
 {
     /// <summary>Label of the variant, for example "370 g". Required, up to 120 characters.</summary>
-    public string? Name { get; init; }
+    public required string Name { get; init; }
 
     /// <summary>Unique code of the variant. Required; letters, digits, dot, hyphen, underscore; up to 64 characters.</summary>
-    public string? Sku { get; init; }
+    public required string Sku { get; init; }
 
     /// <summary>Amount in the measurement unit, for example 370. Greater than zero, at most three decimals.</summary>
-    public decimal? UnitAmount { get; init; }
+    public required decimal? UnitAmount { get; init; }
 
     /// <summary><c>g</c>, <c>kg</c>, <c>ml</c>, <c>l</c> or <c>kom</c>.</summary>
-    public MeasurementUnit? MeasurementUnit { get; init; }
+    public required MeasurementUnit? MeasurementUnit { get; init; }
 
     /// <summary>Regular price in RSD. Greater than zero, at most two decimals.</summary>
-    public decimal? RegularPrice { get; init; }
+    public required decimal? RegularPrice { get; init; }
 
-    /// <summary>Optional discounted price in RSD; must be lower than the regular price.</summary>
-    public decimal? DiscountPrice { get; init; }
+    /// <summary>Discounted price in RSD, lower than the regular price; <c>null</c> = no discount.</summary>
+    public required decimal? DiscountPrice { get; init; }
 
     /// <summary>Inactive variants are not offered in the shop.</summary>
-    public bool IsActive { get; init; } = true;
+    public required bool IsActive { get; init; }
 
     /// <summary>
-    /// Position among the variants of the product, 0 or greater. Omitted: the position in the request (create product),
-    /// after the existing variants (add variant), unchanged (update variant).
+    /// Position among the variants of the product, 0 or greater. Optional. Omitted or null: the position in the request
+    /// (create product), after the existing variants (add variant), unchanged (update variant).
     /// </summary>
     public int? SortOrder { get; init; }
 
     public VariantValues ToValues(int sortOrder) => new(
-        Name!, Sku!, UnitAmount!.Value, MeasurementUnit!.Value, RegularPrice!.Value, DiscountPrice, IsActive, SortOrder ?? sortOrder);
+        Name, Sku, UnitAmount!.Value, MeasurementUnit!.Value, RegularPrice!.Value, DiscountPrice, IsActive, SortOrder ?? sortOrder);
 }
 
 /// <summary>A new variant: its values plus the opening stock.</summary>
 public sealed record CreateVariantRequest : VariantRequest
 {
     /// <summary>Quantity on stock at creation, 0 or greater. Recorded as an <c>InitialStock</c> movement when above zero.</summary>
-    public int InitialStock { get; init; }
+    public required int InitialStock { get; init; }
 
     /// <summary>The variant counts as low on stock at or below this quantity.</summary>
-    public int LowStockThreshold { get; init; }
+    public required int LowStockThreshold { get; init; }
 }
 
-/// <summary>Values of a product shared by create and update.</summary>
+/// <summary>
+/// Values of a product shared by create and update. Create needs only the members marked <c>required</c> here;
+/// update (<see cref="UpdateProductRequest"/>) replaces the whole product and requires every member.
+/// </summary>
 public abstract record ProductRequest
 {
     /// <summary>Category of the product. Required; must not be archived.</summary>
-    public Guid? CategoryId { get; init; }
+    public required Guid? CategoryId { get; init; }
 
     /// <summary>Required, up to 200 characters.</summary>
-    public string? Name { get; init; }
+    public required string Name { get; init; }
 
-    /// <summary>Optional. Create: generated from the name when empty. Update: empty keeps the current slug.</summary>
-    public string? Slug { get; init; }
+    /// <summary>Create: optional, generated from the name when empty. Update: empty or null keeps the current slug.</summary>
+    public virtual string? Slug { get; init; }
 
     /// <summary>Plain text for listings, up to 500 characters.</summary>
-    public string? ShortDescription { get; init; }
+    public virtual string? ShortDescription { get; init; }
 
     /// <summary>HTML. Sanitised on the server: only basic formatting tags and links survive.</summary>
-    public string? Description { get; init; }
+    public virtual string? Description { get; init; }
 
     /// <summary>Base code of the product for internal reference. Required, unique among products.</summary>
-    public string? Sku { get; init; }
+    public required string Sku { get; init; }
 
-    /// <summary>Inactive products are hidden from the shop. An active product needs at least one active variant.</summary>
-    public bool IsActive { get; init; } = true;
+    /// <summary>Inactive products are hidden from the shop. An active product needs at least one active variant. Create default: true.</summary>
+    public virtual bool IsActive { get; init; } = true;
 
-    public bool IsFeatured { get; init; }
+    /// <summary>Create default: false.</summary>
+    public virtual bool IsFeatured { get; init; }
 
     /// <summary>Optional, up to 120 characters.</summary>
-    public string? SeoTitle { get; init; }
+    public virtual string? SeoTitle { get; init; }
 
     /// <summary>Optional, up to 320 characters.</summary>
-    public string? SeoDescription { get; init; }
+    public virtual string? SeoDescription { get; init; }
 }
 
 /// <summary>Body of <c>POST /api/v1/admin/products</c>.</summary>
 public sealed record CreateProductRequest : ProductRequest
 {
     /// <summary>At least one variant (at most 50).</summary>
-    public IReadOnlyList<CreateVariantRequest>? Variants { get; init; }
+    public required IReadOnlyList<CreateVariantRequest> Variants { get; init; }
 }
 
-/// <summary>Body of <c>PUT /api/v1/admin/products/{id}</c>.</summary>
+/// <summary>
+/// Body of <c>PUT /api/v1/admin/products/{id}</c>. Replaces every value of the product, so every member must be sent
+/// (nullable ones may be <c>null</c>); a missing member gives 400 <c>VALIDATION_FAILED</c>.
+/// </summary>
 public sealed record UpdateProductRequest : ProductRequest
 {
     /// <summary>The <c>version</c> of the product as last read. A stale value gives 409 <c>CONCURRENT_EDIT</c>.</summary>
-    public uint? Version { get; init; }
+    public required uint? Version { get; init; }
+
+    /// <inheritdoc />
+    public override required string? Slug { get; init; }
+
+    /// <inheritdoc />
+    public override required string? ShortDescription { get; init; }
+
+    /// <inheritdoc />
+    public override required string? Description { get; init; }
+
+    /// <inheritdoc />
+    public override required bool IsActive { get; init; }
+
+    /// <inheritdoc />
+    public override required bool IsFeatured { get; init; }
+
+    /// <inheritdoc />
+    public override required string? SeoTitle { get; init; }
+
+    /// <inheritdoc />
+    public override required string? SeoDescription { get; init; }
 }
 
 /// <summary>Body of <c>POST /api/v1/admin/products/{id}/images</c>.</summary>
-/// <param name="UploadKey">The <c>key</c> returned by <c>POST /admin/media/upload-url</c> (purpose <c>product</c>), after the file was uploaded.</param>
-/// <param name="AltText">Optional description of the image, up to 200 characters.</param>
-public sealed record AttachProductImageRequest(string? UploadKey, string? AltText);
+public sealed record AttachProductImageRequest
+{
+    /// <summary>The <c>key</c> returned by <c>POST /admin/media/upload-url</c> (purpose <c>product</c>), after the file was uploaded.</summary>
+    public required string UploadKey { get; init; }
+
+    /// <summary>Optional description of the image, up to 200 characters.</summary>
+    public string? AltText { get; init; }
+}
 
 /// <summary>Body of <c>PUT /api/v1/admin/products/{id}/images/order</c>.</summary>
-/// <param name="ImageIds">Every image of the product exactly once, in the new order.</param>
-/// <param name="MainImageId">The main image. Null makes the first image of the new order the main one.</param>
-public sealed record ReorderProductImagesRequest(IReadOnlyList<Guid>? ImageIds, Guid? MainImageId);
+public sealed record ReorderProductImagesRequest
+{
+    /// <summary>Every image of the product exactly once, in the new order.</summary>
+    public required IReadOnlyList<Guid> ImageIds { get; init; }
+
+    /// <summary>The main image. Must be sent; <c>null</c> makes the first image of the new order the main one.</summary>
+    public required Guid? MainImageId { get; init; }
+}
 
 /// <summary>Body of <c>PUT /api/v1/admin/products/{id}/images/{imageId}</c>.</summary>
-/// <param name="AltText">Description of the image, up to 200 characters. Null or empty clears it.</param>
-public sealed record UpdateProductImageRequest(string? AltText);
+public sealed record UpdateProductImageRequest
+{
+    /// <summary>Description of the image, up to 200 characters. Must be sent; <c>null</c> or empty clears it.</summary>
+    public required string? AltText { get; init; }
+}
 
 public enum AdminProductSort
 {

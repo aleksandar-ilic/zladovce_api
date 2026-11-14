@@ -142,6 +142,59 @@ public class InventoryTests : IDisposable
 
         var badLimit = await _api.SendAsync(HttpMethod.Get, "/api/v1/admin/dashboard/low-stock?limit=0");
         await ResponseAssertions.AssertProblemAsync(badLimit, HttpStatusCode.BadRequest, "VALIDATION_FAILED");
+
+        // The threshold must be sent; an empty body no longer sets it to 0.
+        var noThreshold = await _api.SendAsync(HttpMethod.Put, $"/api/v1/admin/inventory/{variantId}/threshold", new { });
+        var problem = await ResponseAssertions.AssertProblemAsync(noThreshold, HttpStatusCode.BadRequest, "VALIDATION_FAILED");
+        Assert.Equal(["lowStockThreshold"], problem.GetProperty("errors").EnumerateObject().Select(e => e.Name));
+        Assert.Equal(5, (await _api.GetAsync($"/api/v1/admin/inventory?q={sku}")).Items().Single().GetProperty("lowStockThreshold").GetInt32());
+    }
+
+    [Fact]
+    public async Task Status_filter_accepts_several_values_and_low_out_matches_the_dashboard()
+    {
+        var token = Unique.Token();
+        var category = await _api.CreateCategoryAsync();
+        var product = await _api.CreateProductAsync(category.Id(), variants:
+        [
+            AdminApi.Variant($"MS-OK-{token}", stock: 10, threshold: 2, name: "ok"),
+            AdminApi.Variant($"MS-LOW-{token}", stock: 2, threshold: 2, name: "low"),
+            AdminApi.Variant($"MS-OUT-{token}", stock: 0, threshold: 0, name: "out"),
+        ]);
+        var ids = product.GetProperty("variants").EnumerateArray().ToDictionary(v => v.GetProperty("name").GetString()!, v => v.Id());
+
+        async Task<Guid[]> ListAsync(string status) =>
+            [.. (await _api.GetAsync($"/api/v1/admin/inventory?q={token}&pageSize=100&{status}")).Items()
+                .Select(i => i.GetProperty("variantId").GetGuid()).Order()];
+
+        Guid[] Expected(params string[] names) => [.. names.Select(n => ids[n]).Order()];
+
+        Assert.Equal(Expected("ok"), await ListAsync("status=ok"));
+        Assert.Equal(Expected("low", "out"), await ListAsync("status=low,out"));
+        Assert.Equal(Expected("low", "out"), await ListAsync("status=low&status=out"));
+        Assert.Equal(Expected("low", "out"), await ListAsync("status=%20low%20,%20out"));
+        Assert.Equal(Expected("ok", "out"), await ListAsync("status=ok,out"));
+        Assert.Equal(Expected("ok", "low", "out"), await ListAsync("status=ok,low&status=out"));
+        Assert.Equal(Expected("ok", "low", "out"), await ListAsync("status="));
+
+        var bad = await _api.SendAsync(HttpMethod.Get, "/api/v1/admin/inventory?status=low,empty");
+        var problem = await ResponseAssertions.AssertProblemAsync(bad, HttpStatusCode.BadRequest, "VALIDATION_FAILED");
+        Assert.True(problem.GetProperty("errors").TryGetProperty("status", out _));
+
+        // The dashboard card and the list behind its link (status=low,out) show exactly the same variants.
+        var dashboard = await _api.GetAsync("/api/v1/admin/dashboard/low-stock?limit=100");
+        var linked = await _api.GetAsync("/api/v1/admin/inventory?status=low,out&pageSize=100");
+        Assert.Equal(linked.GetProperty("totalItems").GetInt32(), dashboard.GetProperty("totalItems").GetInt32());
+        if (dashboard.GetProperty("totalItems").GetInt32() <= 100)
+        {
+            Assert.Equal(
+                linked.Items().Select(i => i.GetProperty("variantId").GetGuid()).Order(),
+                dashboard.Items().Select(i => i.GetProperty("variantId").GetGuid()).Order());
+        }
+
+        Assert.Contains(dashboard.Items(), i => i.GetProperty("variantId").GetGuid() == ids["out"]);
+        Assert.Contains(dashboard.Items(), i => i.GetProperty("variantId").GetGuid() == ids["low"]);
+        Assert.DoesNotContain(dashboard.Items(), i => i.GetProperty("variantId").GetGuid() == ids["ok"]);
     }
 
     [Fact]

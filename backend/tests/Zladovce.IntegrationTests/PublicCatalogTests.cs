@@ -58,7 +58,7 @@ public class PublicCatalogTests : IDisposable
         await PublicAsync($"/api/v1/catalog/products/{visible.GetProperty("slug").GetString()}");
 
         // An inactive category hides itself and its products.
-        await _api.JsonAsync(HttpMethod.Put, $"/api/v1/admin/categories/{category.Id()}", new { name = category.GetProperty("name").GetString(), isActive = false });
+        await _api.JsonAsync(HttpMethod.Put, $"/api/v1/admin/categories/{category.Id()}", AdminApi.Category(category.GetProperty("name").GetString()!, isActive: false));
         Assert.Empty((await GridAsync(slug)).Items());
         await PublicAsync($"/api/v1/catalog/categories/{slug}", HttpStatusCode.NotFound);
         await PublicAsync($"/api/v1/catalog/products/{visible.GetProperty("slug").GetString()}", HttpStatusCode.NotFound);
@@ -153,12 +153,10 @@ public class PublicCatalogTests : IDisposable
     public async Task Category_detail_and_related_products()
     {
         var category = await _api.CreateCategoryAsync();
-        await _api.JsonAsync(HttpMethod.Put, $"/api/v1/admin/categories/{category.Id()}", new
-        {
-            name = category.GetProperty("name").GetString(),
-            seoTitle = "SEO kategorije",
-            seoDescription = "Opis za pretraživače",
-        });
+        await _api.JsonAsync(HttpMethod.Put, $"/api/v1/admin/categories/{category.Id()}", AdminApi.Category(
+            category.GetProperty("name").GetString()!,
+            seoTitle: "SEO kategorije",
+            seoDescription: "Opis za pretraživače"));
         var first = await _api.CreateProductAsync(category.Id());
         var second = await _api.CreateProductAsync(category.Id());
         var third = await _api.CreateProductAsync(category.Id(), isFeatured: true);

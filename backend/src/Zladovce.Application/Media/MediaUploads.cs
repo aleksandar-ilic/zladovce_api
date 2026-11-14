@@ -8,7 +8,7 @@ namespace Zladovce.Application.Media;
 /// <param name="ContentType"><c>image/jpeg</c>, <c>image/png</c> or <c>image/webp</c>. The upload must send exactly this type.</param>
 /// <param name="Size">File size in bytes, 1 to 10485760 (10 MB).</param>
 /// <param name="Purpose"><c>product</c> or <c>category</c>.</param>
-public sealed record CreateUploadUrlRequest(string? FileName, string? ContentType, long Size, string? Purpose);
+public sealed record CreateUploadUrlRequest(string FileName, string ContentType, long Size, string Purpose);
 
 /// <summary>A pre-signed upload. POST a <c>multipart/form-data</c> form to <see cref="UploadUrl"/> with every entry of <see cref="Fields"/> followed by the file in a field named <c>file</c>.</summary>
 /// <param name="UploadUrl">Address of the storage (not of this API).</param>

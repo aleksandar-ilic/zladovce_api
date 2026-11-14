@@ -119,7 +119,7 @@ public class MediaTests : IDisposable
         Assert.False(reordered.GetProperty("images")[1].GetProperty("isMain").GetBoolean());
 
         var incomplete = await _api.SendAsync(HttpMethod.Put, $"/api/v1/admin/products/{product.Id()}/images/order",
-            new { imageIds = new[] { second.Id() } });
+            new { imageIds = new[] { second.Id() }, mainImageId = (Guid?)null });
         await ResponseAssertions.AssertProblemAsync(incomplete, HttpStatusCode.BadRequest, "VALIDATION_FAILED");
 
         var alt = await _api.JsonAsync(HttpMethod.Put, $"/api/v1/admin/products/{product.Id()}/images/{first.Id()}", new { altText = "Nov opis" });
@@ -216,7 +216,7 @@ public class MediaTests : IDisposable
         Assert.StartsWith("uploads/category/", key);
 
         var category = await _api.JsonAsync(HttpMethod.Post, "/api/v1/admin/categories",
-            new { name = $"Sa slikom {Unique.Token()}", imageKey = key }, HttpStatusCode.Created);
+            AdminApi.Category($"Sa slikom {Unique.Token()}", imageKey: key), HttpStatusCode.Created);
         var image = category.GetProperty("image");
         var storageKey = image.GetProperty("key").GetString()!;
         Assert.StartsWith("media/categories/", storageKey);
@@ -228,20 +228,79 @@ public class MediaTests : IDisposable
 
         // Keeping the same key keeps the image.
         var kept = await _api.JsonAsync(HttpMethod.Put, $"/api/v1/admin/categories/{category.Id()}",
-            new { name = category.GetProperty("name").GetString(), imageKey = storageKey });
+            AdminApi.Category(category.GetProperty("name").GetString()!, imageKey: storageKey));
         Assert.Equal(storageKey, kept.GetProperty("image").GetProperty("key").GetString());
 
         // A product upload cannot be used for a category.
         var (productKey, _) = await UploadAsync(Image(100, 100, MagickFormat.Png), "image/png");
         var wrongPurpose = await _api.SendAsync(HttpMethod.Put, $"/api/v1/admin/categories/{category.Id()}",
-            new { name = "x", imageKey = productKey });
-        await ResponseAssertions.AssertProblemAsync(wrongPurpose, HttpStatusCode.BadRequest, "VALIDATION_FAILED");
+            AdminApi.Category("x", imageKey: productKey));
+        var wrongPurposeProblem = await ResponseAssertions.AssertProblemAsync(wrongPurpose, HttpStatusCode.BadRequest, "VALIDATION_FAILED");
+        Assert.True(wrongPurposeProblem.GetProperty("errors").TryGetProperty("imageKey", out _));
 
         // Null removes the image and its files.
         var removed = await _api.JsonAsync(HttpMethod.Put, $"/api/v1/admin/categories/{category.Id()}",
-            new { name = category.GetProperty("name").GetString(), imageKey = (string?)null });
+            AdminApi.Category(category.GetProperty("name").GetString()!, imageKey: null));
         Assert.Equal(JsonValueKind.Null, removed.GetProperty("image").ValueKind);
         Assert.False(await _minio.ExistsAsync($"{storageKey}/1200.webp"));
+    }
+
+    [Fact]
+    public async Task Archiving_a_category_clears_its_image_and_deletes_the_files()
+    {
+        var (key, _) = await UploadAsync(Image(900, 600, MagickFormat.Png), "image/png", purpose: "category");
+        var category = await _api.JsonAsync(HttpMethod.Post, "/api/v1/admin/categories",
+            AdminApi.Category($"Arhiva sa slikom {Unique.Token()}", imageKey: key), HttpStatusCode.Created);
+        var storageKey = category.GetProperty("image").GetProperty("key").GetString()!;
+        string[] files = [$"{storageKey}/400.webp", $"{storageKey}/800.webp", $"{storageKey}/900.webp", $"{storageKey}/manifest.json"];
+        foreach (var file in files)
+        {
+            Assert.True(await _minio.ExistsAsync(file), file);
+        }
+
+        var archived = await _api.SendAsync(HttpMethod.Delete, $"/api/v1/admin/categories/{category.Id()}");
+        Assert.Equal(HttpStatusCode.NoContent, archived.StatusCode);
+
+        // Same save: the archived row no longer refers to the image.
+        var row = await new PostgresFixtureAccessor(_factory).CategoryImageAsync(category.Id());
+        Assert.NotNull(row.DeletedAt);
+        Assert.Null(row.ImageKey);
+        Assert.Null(row.ImageWidth);
+        Assert.Null(row.ImageHeight);
+
+        // After the save: every rendition and the manifest are gone.
+        foreach (var file in files)
+        {
+            Assert.False(await _minio.ExistsAsync(file), file);
+        }
+
+        Assert.Equal(1L, await new PostgresFixtureAccessor(_factory).AuditCountAsync("Category.Archived", category.Id()));
+    }
+
+    [Fact]
+    public async Task Archiving_a_category_succeeds_when_the_image_files_cannot_be_deleted()
+    {
+        // A store that refuses every request (wrong credentials): attaching works through the real store,
+        // archiving runs against the broken one. The database change must stand; the failure is only logged.
+        var (key, _) = await UploadAsync(Image(500, 500, MagickFormat.Png), "image/png", purpose: "category");
+        var category = await _api.JsonAsync(HttpMethod.Post, "/api/v1/admin/categories",
+            AdminApi.Category($"Neobrisiva slika {Unique.Token()}", imageKey: key), HttpStatusCode.Created);
+        var storageKey = category.GetProperty("image").GetProperty("key").GetString()!;
+
+        var settings = _minio.Settings();
+        settings["Media:SecretKey"] = "wrong-secret";
+        using var brokenStorage = new DevApiFactory { ConnectionString = _factory.ConnectionString, ExtraSettings = settings };
+        using var client = brokenStorage.CreateClient();
+
+        var archived = await new AdminApi(client).SendAsync(HttpMethod.Delete, $"/api/v1/admin/categories/{category.Id()}");
+        Assert.Equal(HttpStatusCode.NoContent, archived.StatusCode);
+
+        var row = await new PostgresFixtureAccessor(_factory).CategoryImageAsync(category.Id());
+        Assert.NotNull(row.DeletedAt);
+        Assert.Null(row.ImageKey);
+
+        // The files stay behind (unused, costing storage only).
+        Assert.True(await _minio.ExistsAsync($"{storageKey}/500.webp"));
     }
 
     [Fact]
@@ -317,5 +376,20 @@ internal sealed class PostgresFixtureAccessor(DevApiFactory factory)
         command.Parameters.AddWithValue("a", action);
         command.Parameters.AddWithValue("id", entityId.ToString());
         return (long)(await command.ExecuteScalarAsync())!;
+    }
+
+    public async Task<(DateTimeOffset? DeletedAt, string? ImageKey, int? ImageWidth, int? ImageHeight)> CategoryImageAsync(Guid categoryId)
+    {
+        var dataSource = (Npgsql.NpgsqlDataSource)factory.Services.GetService(typeof(Npgsql.NpgsqlDataSource))!;
+        await using var command = dataSource.CreateCommand(
+            "SELECT deleted_at, image_key, image_width, image_height FROM categories WHERE id = @id");
+        command.Parameters.AddWithValue("id", categoryId);
+        await using var reader = await command.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        return (
+            reader.IsDBNull(0) ? null : reader.GetFieldValue<DateTimeOffset>(0),
+            reader.IsDBNull(1) ? null : reader.GetString(1),
+            reader.IsDBNull(2) ? null : reader.GetInt32(2),
+            reader.IsDBNull(3) ? null : reader.GetInt32(3));
     }
 }

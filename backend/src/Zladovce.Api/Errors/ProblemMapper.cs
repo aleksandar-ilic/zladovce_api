@@ -12,7 +12,7 @@ public static class ProblemMapper
     {
         RequestValidationException e => ApiProblem.Create(StatusCodes.Status400BadRequest, e.Code, e.Title, e.Detail, e.Errors),
         NotFoundException e => ApiProblem.Create(StatusCodes.Status404NotFound, e.Code, e.Title, e.Detail),
-        ConflictException e => ApiProblem.Create(StatusCodes.Status409Conflict, e.Code, e.Title, e.Detail),
+        ConflictException e => ApiProblem.Create(StatusCodes.Status409Conflict, e.Code, e.Title, e.Detail, e.Errors),
         ForbiddenException e => ApiProblem.Create(StatusCodes.Status403Forbidden, e.Code, e.Title, e.Detail),
         BadRequestException e => ApiProblem.Create(StatusCodes.Status400BadRequest, e.Code, e.Title, e.Detail),
         InsufficientStockException e => ApiProblem.Create(StatusCodes.Status409Conflict, e.Code, e.Title, e.Detail),
@@ -44,14 +44,20 @@ public static class ProblemMapper
 
     private static ApiProblem FromUniqueViolation(string? constraintName) => constraintName switch
     {
+        // The services check slugs and SKUs before saving and report the exact field; these are the rare races in between.
+        // Product creation repeats its checks after such a failure, so a variant SKU there still gets "variants[i].sku".
         "ix_categories_slug" or "ix_products_slug" =>
-            ApiProblem.Create(StatusCodes.Status409Conflict, ErrorCodes.SlugTaken, ErrorTexts.SlugTakenTitle, ErrorTexts.SlugTakenDetail),
+            ApiProblem.Create(StatusCodes.Status409Conflict, ErrorCodes.SlugTaken, ErrorTexts.SlugTakenTitle, ErrorTexts.SlugTakenDetail,
+                FieldError("slug", ErrorTexts.SlugTakenDetail)),
         "ix_products_sku" or "ix_product_variants_sku" =>
-            ApiProblem.Create(StatusCodes.Status409Conflict, ErrorCodes.SkuTaken, ErrorTexts.SkuTakenTitle, ErrorTexts.SkuTakenDetail),
+            ApiProblem.Create(StatusCodes.Status409Conflict, ErrorCodes.SkuTaken, ErrorTexts.SkuTakenTitle, ErrorTexts.SkuTakenDetail,
+                FieldError("sku", ErrorTexts.SkuTakenDetail)),
         "pk_product_images" =>
             ApiProblem.Create(StatusCodes.Status409Conflict, ErrorCodes.ImageAlreadyAttached, ErrorTexts.ImageAlreadyAttachedTitle, ErrorTexts.ImageAlreadyAttachedDetail),
         _ => FromStatusCode(StatusCodes.Status409Conflict),
     };
+
+    private static Dictionary<string, string[]> FieldError(string field, string message) => new(StringComparer.Ordinal) { [field] = [message] };
 
     public static ApiProblem FromStatusCode(int statusCode) => statusCode switch
     {

@@ -83,6 +83,7 @@ public class SlugAllocatorTests
         var exception = await Assert.ThrowsAsync<ConflictException>(() =>
             SlugAllocator.AllocateAsync("moj-slug", "Ime", _ => Task.FromResult(true)));
         Assert.Equal(ErrorCodes.SlugTaken, exception.Code);
+        Assert.Equal(["slug"], exception.Errors!.Keys);
     }
 
     [Fact]
@@ -132,6 +133,7 @@ public class CatalogValidatorTests
         MeasurementUnit = MeasurementUnit.Gram,
         RegularPrice = 650m,
         DiscountPrice = 590m,
+        IsActive = true,
         InitialStock = 10,
         LowStockThreshold = 2,
     };
@@ -190,12 +192,22 @@ public class CatalogValidatorTests
             MeasurementUnit = MeasurementUnit.Piece,
             RegularPrice = (decimal)regular,
             DiscountPrice = (decimal)discount,
+            IsActive = true,
         }).Keys);
 
     [Fact]
     public void Unit_amount_and_measurement_unit_are_required()
     {
-        var errors = Errors(new VariantRequestValidator(), new VariantRequest { Name = "x", Sku = "X", RegularPrice = 1m });
+        var errors = Errors(new VariantRequestValidator(), new VariantRequest
+        {
+            Name = "x",
+            Sku = "X",
+            UnitAmount = null,
+            MeasurementUnit = null,
+            RegularPrice = 1m,
+            DiscountPrice = null,
+            IsActive = true,
+        });
         Assert.Contains("UnitAmount", errors.Keys);
         Assert.Contains("MeasurementUnit", errors.Keys);
     }
@@ -204,9 +216,17 @@ public class CatalogValidatorTests
     public void Update_requires_version() =>
         Assert.Contains("Version", Errors(new UpdateProductRequestValidator(), new UpdateProductRequest
         {
+            Version = null,
             CategoryId = Guid.CreateVersion7(),
             Name = "x",
+            Slug = null,
+            ShortDescription = null,
+            Description = null,
             Sku = "X",
+            IsActive = true,
+            IsFeatured = false,
+            SeoTitle = null,
+            SeoDescription = null,
         }).Keys);
 
     [Fact]
@@ -216,7 +236,17 @@ public class CatalogValidatorTests
     [Fact]
     public void Category_name_is_required_and_slug_validated()
     {
-        var errors = Errors(new SaveCategoryRequestValidator(), new SaveCategoryRequest(null, "Bad Slug", null, null));
+        var errors = Errors(new SaveCategoryRequestValidator(), new SaveCategoryRequest
+        {
+            Name = null!,
+            Slug = "Bad Slug",
+            Description = null,
+            ImageKey = null,
+            SortOrder = 0,
+            IsActive = true,
+            SeoTitle = null,
+            SeoDescription = null,
+        });
         Assert.Contains("Name", errors.Keys);
         Assert.Contains("Slug", errors.Keys);
     }
@@ -232,7 +262,7 @@ public class CatalogValidatorTests
 
     [Fact]
     public void Threshold_must_not_be_negative() =>
-        Assert.Contains("LowStockThreshold", Errors(new SetLowStockThresholdRequestValidator(), new SetLowStockThresholdRequest(-1)).Keys);
+        Assert.Contains("LowStockThreshold", Errors(new SetLowStockThresholdRequestValidator(), new SetLowStockThresholdRequest { LowStockThreshold = -1 }).Keys);
 
     [Theory]
     [InlineData("image/gif", 100, "product")]

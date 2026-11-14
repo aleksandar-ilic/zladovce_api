@@ -100,8 +100,19 @@ public sealed class CategoryService(
                 ErrorTexts.CategoryHasProductsDetail, ErrorCodes.CategoryHasProducts, ErrorTexts.CategoryHasProductsTitle);
         }
 
-        category.Archive(timeProvider.GetUtcNow());
+        // The image goes with the category: the reference is cleared in the same save as the archive flag,
+        // the files are deleted only after that save succeeded (a storage failure is logged and leaves unused files,
+        // never a record that points at missing files).
+        (string Key, int Width)? image = category is { ImageKey: { } key, ImageWidth: { } width } ? (key, width) : null;
+        var now = timeProvider.GetUtcNow();
+        category.RemoveImage(now);
+        category.Archive(now);
         await db.SaveChangesAsync(cancellationToken);
+
+        if (image is { } old)
+        {
+            await images.DeleteRenditionsAsync(old.Key, old.Width, cancellationToken);
+        }
     }
 
     public async Task<AdminCategoryListResponse> ReorderAsync(ReorderCategoriesRequest request, CancellationToken cancellationToken)

@@ -64,6 +64,34 @@ public class ProblemMapperTests
     }
 
     [Fact]
+    public void Conflict_without_field_has_no_errors_and_field_conflict_keeps_its_errors()
+    {
+        Assert.Null(ProblemMapper.FromException(new ConflictException()).Errors);
+
+        var errors = new Dictionary<string, string[]> { ["variants[1].sku"] = ["Šifra je zauzeta."] };
+        var problem = ProblemMapper.FromException(new ConflictException("x", ErrorCodes.SkuTaken, "y", errors));
+
+        Assert.Equal(409, problem.Status);
+        Assert.Equal(ErrorCodes.SkuTaken, problem.Code);
+        Assert.Equal(["variants[1].sku"], problem.Errors!.Keys);
+    }
+
+    [Theory]
+    [InlineData("ix_products_slug", "SLUG_TAKEN", "slug")]
+    [InlineData("ix_categories_slug", "SLUG_TAKEN", "slug")]
+    [InlineData("ix_products_sku", "SKU_TAKEN", "sku")]
+    [InlineData("ix_product_variants_sku", "SKU_TAKEN", "sku")]
+    public void Unique_index_races_point_at_the_field(string constraint, string code, string field)
+    {
+        var postgres = new Npgsql.PostgresException("duplicate key", "ERROR", "ERROR", Npgsql.PostgresErrorCodes.UniqueViolation, constraintName: constraint);
+        var problem = ProblemMapper.FromException(new DbUpdateException("x", postgres));
+
+        Assert.Equal(409, problem.Status);
+        Assert.Equal(code, problem.Code);
+        Assert.Equal([field], problem.Errors!.Keys);
+    }
+
+    [Fact]
     public void Forbidden_maps_to_403()
     {
         var problem = ProblemMapper.FromException(new ForbiddenException());

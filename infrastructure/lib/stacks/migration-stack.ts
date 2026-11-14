@@ -47,7 +47,10 @@ export class MigrationStack extends Stack {
     };
 
     if (db.migrationRunnerCanReadMasterSecret) {
-      // First-time bootstrap only: create the two IAM-authenticated roles on a new database.
+      // `{"action":"bootstrap"}`: create the two IAM-authenticated roles on a new database (idempotent).
+      // The function is in the private subnets with egress and reaches Secrets Manager through the NAT
+      // (HTTPS); the RDS-managed secret is encrypted with the AWS managed key aws/secretsmanager, which
+      // needs no separate kms:Decrypt permission.
       environment.Database__MasterSecretArn = database.masterSecret.secretArn;
       statements.push(
         new iam.PolicyStatement({
@@ -62,7 +65,7 @@ export class MigrationStack extends Stack {
       functionName: `${resourcePrefix(config)}-migrations`,
       description: `Zladovce ${config.envName} database migration runner (invoked by the pipeline only)`,
       handler: config.api.migrationHandler,
-      assetPath: config.api.migrationAssetPath,
+      assetPath: config.api.lambdaAssetPath,
       requireArtifacts: props.requireArtifacts,
       memoryMb: 1024,
       timeout: Duration.seconds(config.api.migrationTimeoutSeconds),
@@ -79,6 +82,11 @@ export class MigrationStack extends Stack {
     new CfnOutput(this, 'MigrationFunctionName', {
       value: this.migrationFunction.function.functionName,
       description: 'Invoke before deploying the API stack to apply database migrations',
+    });
+    // Read by .github/workflows/deploy.yml: invoke {"action":"bootstrap"} before {"action":"migrate"} while this is true.
+    new CfnOutput(this, 'MigrationBootstrapEnabled', {
+      value: db.migrationRunnerCanReadMasterSecret ? 'true' : 'false',
+      description: 'Whether the migration runner may read the master secret (and the pipeline runs the role bootstrap)',
     });
   }
 }

@@ -16,14 +16,21 @@ One set of stacks per environment, named `Zladovce-<Env>-<Part>` (`Dev`, `Stagin
 | `Network` | VPC (2 AZs, public + private subnets), NAT instance (`t4g.nano`) or NAT gateway, S3 gateway endpoint, all security groups |
 | `Database` | RDS PostgreSQL 17 (`db.t4g.micro`, 20 GB gp3, encrypted, private, single-AZ, IAM authentication, RDS-managed master secret), optional RDS Proxy |
 | `Auth` | Cognito user pool for administrators (no self sign-up, groups `Owner` / `Staff`, optional TOTP), public SPA client |
-| `Media` | Private S3 bucket (`uploads/`, `media/`) + CloudFront with Origin Access Control serving `media/*` only |
+| `Media` | Private S3 bucket (`uploads/`, `media/`) + CloudFront with Origin Access Control serving `media/*` only; image processor Lambda (S3 trigger on `uploads/`, outside the VPC) with its SQS dead-letter queue |
 | `Migrations` | Migration runner Lambda (pipeline only, not behind API Gateway) |
 | `Api` | API Lambda (ASP.NET Core, .NET 10, arm64) with alias `live`, HTTP API with JWT authorizer on `/api/v1/admin/*` |
-| `Observability` | SNS alarm topic, CloudWatch alarms (API 5xx / p95 latency, Lambda errors / throttles, RDS CPU / storage / connections, NAT status check) |
-| `Frontend` | Amplify Hosting apps (storefront, admin). Only when `amplify.enabled` is `true` |
+| `Observability` | SNS alarm topic, CloudWatch alarms (API 5xx / p95 latency, Lambda errors / throttles, image processor errors / dead-lettered uploads, RDS CPU / storage / connections, NAT status check) |
+| `Frontend` | Amplify Hosting apps (storefront, admin) built from the separate frontend repository. Only when `amplify.enabled` is `true` |
 
 Dependencies point one way only (`Network ← Database ← Migrations / Api ← Observability`,
-`Auth, Media ← Api ← Frontend`), so there are no cyclic cross-stack references.
+`Auth, Media ← Api ← Frontend`, `Media ← Observability`), so there are no cyclic cross-stack references.
+
+**Why the image processor is in the `Media` stack.** An S3 notification to a Lambda function needs references in
+both directions: the bucket's notification configuration names the function, and the function's invoke permission
+names the bucket (as `SourceArn`). With the bucket in `Media` and the function in another stack this is a cyclic
+cross-stack dependency. With bucket, function, permission, notification (a CDK-owned `Custom::S3BucketNotifications`
+resource, which avoids the bucket ↔ permission cycle inside the stack) and dead-letter queue in `Media`, that stack
+has no cross-stack references at all; `Observability` reads the function and the queue from it.
 
 ```
 infrastructure/
@@ -68,10 +75,13 @@ Without `-c env=…` the environment is `dev`.
 
 The Lambda code comes from two publish directories (paths relative to `infrastructure/`):
 
-| Config key / context | Default | Handler |
+| Config key / context | Default | Handlers |
 |---|---|---|
-| `apiAssetPath` | `../backend/artifacts/api` | `Zladovce.Api` |
-| `migrationAssetPath` | `../backend/artifacts/lambda` | `Zladovce.Lambda::Zladovce.Lambda.MigrationRunner::HandleAsync` |
+| `apiAssetPath` | `../backend/artifacts/api` | `Zladovce.Api` (API function) |
+| `lambdaAssetPath` | `../backend/artifacts/lambda` | `Zladovce.Lambda::Zladovce.Lambda.MigrationRunner::HandleAsync` (migration runner), `Zladovce.Lambda::Zladovce.Lambda.ImageProcessorFunction::HandleAsync` (image processor) |
+
+`lambdaAssetPath` was called `migrationAssetPath` before the image processor shared the package; `-c migrationAssetPath=…`
+is still accepted.
 
 Produce them with:
 
@@ -106,6 +116,10 @@ Everything is in [`lib/config.ts`](lib/config.ts). Nothing there is a secret.
 | CORS origins | `http://localhost:4200`, `http://localhost:4201` | `https://staging.zladovce.com`, `https://admin-staging.zladovce.com` | `https://zladovce.com`, `https://www.zladovce.com`, `https://admin.zladovce.com` |
 | Custom domains (`domains.api`, `domains.media`) | none | none (commented placeholders) | none (commented placeholders) |
 | `amplify.enabled` | no | no | no |
+| `amplify.repository` / branch | `https://github.com/aleksandar-ilic/zladovce_web` / `develop` | same / `main` | same / `production` |
+| `api.mediaReadyWaitSeconds` (`Media__ReadyWaitSeconds`) | 8 | 8 | 8 |
+| `api.maxOrderQuantity` (`Catalog__MaxOrderQuantity`) | not set (backend default 20) | not set | not set |
+| Image processor (`media.processor*`) | 1024 MB, 60 s, 2 retries, DLQ kept 14 days | same | same |
 
 Notes:
 
@@ -124,10 +138,14 @@ Notes:
   preflight requests reach the application.
 - **Reserved concurrency:** a brand-new AWS account often has a Lambda concurrency quota of 10, in
   which case any reservation is rejected at deploy time. Request a quota increase, or set
-  `api.reservedConcurrency` to `undefined` temporarily.
+  `api.reservedConcurrency` to `undefined` temporarily. The image processor has no reservation.
+- **Timeouts.** The HTTP API gives up after 30 s (hard limit of the integration). `validateConfig` refuses an
+  `api.timeoutSeconds` above that, and an `api.mediaReadyWaitSeconds` that is not below both `api.timeoutSeconds`
+  (15) and 30 s – the attach endpoints must answer `409 IMAGE_NOT_READY` themselves, before Lambda or the gateway
+  cut them off. (The backend additionally clamps the wait to 0–25 s.)
 
 Command-line overrides: `-c account=…`, `-c region=…`, `-c natMode=instance|gateway`,
-`-c useRdsProxy=true|false`, `-c apiAssetPath=…`, `-c migrationAssetPath=…`, `-c alarmEmail=…`,
+`-c useRdsProxy=true|false`, `-c apiAssetPath=…`, `-c lambdaAssetPath=…`, `-c alarmEmail=…`,
 `-c requireArtifacts=true`, `-c nag=true`. Prefer editing `lib/config.ts` for anything permanent, so
 that every deployment of an environment uses the same values.
 
@@ -140,19 +158,47 @@ ASPNETCORE_ENVIRONMENT
 Database__Host  Database__Port  Database__Name  Database__User (zladovce_app)
 Database__UseIamAuth=true  Database__Region  Database__MaxPoolSize=2
 Auth__Cognito__Region  Auth__Cognito__UserPoolId  Auth__Cognito__ClientId
-Media__BucketName  Media__BaseUrl
+Media__BucketName  Media__BaseUrl  Media__Region
+Media__ProcessInline=false  Media__ReadyWaitSeconds (8)
+Catalog__MaxOrderQuantity (only when api.maxOrderQuantity is set)
 Cors__AllowedOrigins__0 … N
 ```
+
+`Database__User` is `zladovce_app`, the data-only role created by the bootstrap (SELECT/INSERT/UPDATE/DELETE, no DDL);
+the API role may `rds-db:connect` as that user only.
+
+Image processor (`zladovce-<env>-image-processor`, not in the VPC): `Media__BucketName`, `Media__Region`. No database
+settings and no database permission.
 
 Migration function (`zladovce-<env>-migrations`): `ASPNETCORE_ENVIRONMENT`, `DOTNET_ENVIRONMENT`,
 `Database__*` as above with `Database__User=zladovce_migrator` (always the instance endpoint, never the
 proxy), `Database__AppUser`, and `Database__MasterSecretArn` when
 `database.migrationRunnerCanReadMasterSecret` is on.
 
-IAM: the API role may only `rds-db:connect` as `zladovce_app`, `s3:PutObject` on `uploads/*`, and
-`s3:GetObject` / `s3:DeleteObject` on `media/*`. It has no `s3:ListBucket`, so a request for a missing
-object returns **403, not 404**. The migration role may only `rds-db:connect` as `zladovce_migrator`
-(plus reading the master secret while the bootstrap switch is on).
+IAM:
+
+| Role | Permissions |
+|---|---|
+| API | `rds-db:connect` as `zladovce_app`; `s3:PutObject` on `uploads/*` (the pre-signed POST is signed with this role, so this is what authorises the browser upload); `s3:GetObject` + `s3:DeleteObject` on `media/*` (attach reads `manifest.json`, deleting/replacing/archiving removes renditions); `s3:ListBucket` on the media bucket |
+| Image processor | `s3:GetObject` + `s3:DeleteObject` on `uploads/*`; `s3:PutObject` + `s3:GetObject` on `media/*`; `s3:ListBucket` on the media bucket; `sqs:SendMessage` (+ `GetQueueAttributes`, `GetQueueUrl`, added by CDK) on its dead-letter queue. No VPC, database or secrets permissions |
+| Migration runner | `rds-db:connect` as `zladovce_migrator`; `secretsmanager:GetSecretValue` on the RDS-managed master secret while `database.migrationRunnerCanReadMasterSecret` is on |
+
+`s3:ListBucket` is what makes S3 answer **404 instead of 403** for a missing object (the manifest of an image that is
+still being processed). It is granted on the one media bucket **without** an `s3:prefix` condition: S3 evaluates this
+permission for `GetObject`/`HeadObject` without a prefix in the request context, so a prefix condition would never
+match and missing objects would be 403 again. It lets the two roles list keys of this bucket (upload keys and image
+folders – no personal data); it is not a wildcard resource, so cdk-nag does not flag it.
+
+Media bucket CORS: `POST` only (pre-signed multipart form upload), from `cors.adminOrigins` only, `AllowedHeaders: *`,
+`ETag` exposed. Lifecycle: objects under `uploads/` expire after `media.uploadsExpirationDays` (1 day) – leftovers of
+uploads that were never processed; noncurrent versions expire after 30 days.
+
+Image processor failures: asynchronous S3 invocations are retried twice by Lambda (`media.processorRetryAttempts`),
+events older than one hour are dropped from the retry queue, and an event that still fails goes to the SQS
+dead-letter queue `zladovce-<env>-image-processor-dlq` (on-failure destination, SSE-SQS, TLS only, 14 days). Alarms:
+`ImageProcessorErrors` (Lambda errors ≥ `observability.lambdaErrorThreshold` in 5 minutes) and
+`ImageProcessorDeadLetters` (any visible message). The administrator sees `IMAGE_NOT_READY` for such an upload and can
+upload the file again; inspect the message (`ImageProcessorDeadLetterQueueUrl` output), fix the cause, then delete it.
 
 ## Cost switches
 
@@ -182,15 +228,17 @@ Nothing below has been executed yet.
 5. **Deploy** – in this order, so that migrations run before the new API version is live:
    1. `npx cdk deploy Zladovce-<Env>-Migrations -c env=<env> -c requireArtifacts=true` (also deploys
       `Network` and `Database`).
-   2. **Create the database roles (first deployment only).** The database is private and has only
-      the master user. Two roles must exist before anything can connect with IAM authentication:
-      `zladovce_migrator` (may change schema) and `zladovce_app` (data only), both with
-      `GRANT rds_iam`. The migration runner is allowed to read the RDS-managed master secret
-      (`Database__MasterSecretArn`) for exactly this purpose, **but the backend does not implement
-      this bootstrap yet** – until it does, create the roles manually (for example from a temporary
-      host in the VPC, or with a one-off script using the master secret). Afterwards set
-      `database.migrationRunnerCanReadMasterSecret` to `false` and redeploy.
-   3. Invoke the migration function: `aws lambda invoke --function-name zladovce-<env>-migrations --payload '{}' --cli-binary-format raw-in-base64-out out.json`.
+   2. **Create the database roles.** The database is private and has only the master user. Two roles
+      must exist before anything can connect with IAM authentication: `zladovce_migrator` (may change
+      schema) and `zladovce_app` (data only), both with `GRANT rds_iam`. The migration runner creates
+      them with the RDS-managed master secret (`Database__MasterSecretArn`; it runs in the private
+      subnets and reaches Secrets Manager through the NAT over HTTPS):
+      `aws lambda invoke --function-name zladovce-<env>-migrations --payload '{"action":"bootstrap"}' --cli-binary-format raw-in-base64-out bootstrap.json`.
+      The action is idempotent. `deploy.yml` runs it on every deployment before `migrate` while the
+      Migrations stack output `MigrationBootstrapEnabled` is `true` (= `database.migrationRunnerCanReadMasterSecret`,
+      default on). Once the roles exist you may set that switch to `false` and redeploy: the master-secret
+      permission disappears and the pipeline skips the bootstrap.
+   3. Invoke the migration function: `aws lambda invoke --function-name zladovce-<env>-migrations --payload '{"action":"migrate"}' --cli-binary-format raw-in-base64-out out.json` (`{}` means the same).
    4. `npx cdk deploy --all -c env=<env> -c requireArtifacts=true`.
    5. `curl <ApiUrl>/health`.
 6. **First administrator.** Create the first user in the Cognito pool (console or CLI) and add it to
@@ -198,12 +246,17 @@ Nothing below has been executed yet.
 7. **Alarm e-mail.** Set `observability.alarmEmail` and confirm the subscription e-mail from SNS.
 8. **Frontend values.** The frontend needs only public values, all stack outputs: `ApiUrl`,
    `UserPoolId`, `UserPoolClientId`, region, `MediaBaseUrl`.
-9. **Amplify (later).** Store a Git provider access token as a plain-text secret in Secrets Manager,
-   set `amplify.enabled`, `amplify.repository`, `amplify.accessTokenSecretName` and `amplify.branch`,
-   deploy, then add the generated Amplify URLs (stack outputs) to `cors.storefrontOrigins` /
+9. **Amplify (later).** The frontend is its own repository,
+   [`zladovce_web`](https://github.com/aleksandar-ilic/zladovce_web), with the Angular workspace at the
+   repository **root** (`amplify.repository` defaults to it; the build specs in `amplify/` are plain
+   single-application specs without `appRoot`, building `npm run build:storefront` → `dist/storefront/browser`
+   and `npm run build:admin` → `dist/admin/browser`; no `AMPLIFY_MONOREPO_APP_ROOT`). Store a GitHub access token
+   as a plain-text secret in Secrets Manager, set `amplify.enabled`, `amplify.accessTokenSecretName` and check
+   `amplify.branch`, deploy, then add the generated Amplify URLs (stack outputs) to `cors.storefrontOrigins` /
    `cors.adminOrigins` and deploy again. Custom domains for the Amplify apps are not configured by
    this code – associate them in the Amplify console. The apps receive `ZLADOVCE_*` environment
-   variables at build time; the frontend build does not read them yet.
+   variables at build time; the frontend build does not read them yet. `deploy.yml` does not build the
+   frontend.
 10. **Still to come (later phases):** SES domain identity (DKIM, SPF, DMARC, custom MAIL FROM,
     production access request) and Cognito e-mail through SES; custom domains and DNS records;
     AWS Budget alert.
@@ -238,21 +291,25 @@ default PostgreSQL port, no deletion protection outside production, optional MFA
 plan, no S3 / CloudFront access logs, no WAF / geo restriction on the media distribution, default
 CloudFront certificate while no custom domain is configured, public API routes, NAT instance
 (unencrypted root volume, no detailed monitoring, no termination protection), VPC flow logs off
-outside production, and the IAM wildcards listed below.
+outside production, the AWS managed `AWSLambdaBasicExecutionRole` of the CDK-owned bucket-notifications
+handler (and of the auto-delete handler in dev), the image processor dead-letter queue having no dead-letter
+queue of its own (SQS3), and the IAM wildcards listed below.
 
 IAM wildcards (all acknowledged):
 
 - `Resource: *` for the six EC2 network-interface actions every VPC Lambda needs (they do not
-  support resource-level permissions).
-- `…:log-group:/aws/lambda/<function>:*` – log streams of the function's own log group.
-- `<bucket>/uploads/*` and `<bucket>/media/*` – object prefixes.
+  support resource-level permissions). API and migration runner only; the image processor is outside the VPC.
+- `…:log-group:/aws/lambda/<function>:*` – log streams of the function's own log group (API, migration runner,
+  image processor).
+- `<bucket>/uploads/*` and `<bucket>/media/*` – object prefixes (API and image processor).
+
+The bucket-notifications handler's own policy is `s3:PutBucketNotification` on the media bucket only.
 
 ## Intentionally not built yet
 
 Later phases add these; the code has extension points (comments in the stacks) but no stubs:
 
 - Outbox worker Lambda and its EventBridge schedule.
-- Image processor Lambda (S3 trigger on `uploads/`).
 - SES identity, configuration set and the API's permission to send e-mail.
 - Cognito administration permissions for the API (inviting administrators).
 - Tracking-token encryption key in Secrets Manager.

@@ -41,7 +41,7 @@ Phase 1 – Discovery and Architecture: documentation drafted, awaiting review. 
 
 Phase 2 – Foundation: built and tested locally (backend 179 tests, frontend 198 tests, infrastructure 81 tests, all passing as of 2026-11-14). Nothing is deployed to AWS; Cognito sign-in, RDS IAM authentication, Lambda hosting and the GitHub workflows are untested against real services.
 
-Phase 3 – Catalog and Administration: in progress.
+Phase 3 – Catalog and Administration: backend done (categories, products, variants, images, inventory; 415 backend tests passing). Admin screens in progress in zladovce_web. Infrastructure for the image processor is not added yet.
 
 The business questions in [IMPLEMENTATION_PLAN](docs/IMPLEMENTATION_PLAN.md#r4-open-questions-for-the-business) are still open; work proceeds on the assumptions in section R3.
 

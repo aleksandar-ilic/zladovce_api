@@ -169,8 +169,8 @@ public sealed class AdminProductService(
 
         await EnsureCategoryUsableAsync(categoryId, cancellationToken);
         var slug = await SlugAllocator.AllocateAsync(request.Slug, request.Name!, candidate => SlugTakenAsync(candidate, null, cancellationToken));
-        await EnsureProductSkuFreeAsync(request.Sku!, null, cancellationToken);
-        await EnsureVariantSkusFreeAsync([.. request.Variants!.Select(v => v.Sku!)], null, cancellationToken);
+        await EnsureProductSkuFreeAsync(request.Sku, null, cancellationToken);
+        await EnsureVariantSkusFreeAsync(VariantSkuFields(request), null, cancellationToken);
 
         var product = Product.Create(ToValues(request, categoryId, slug), [.. request.Variants!.Select((v, index) => v.ToValues(index))], now);
         db.Products.Add(product);
@@ -180,7 +180,24 @@ public sealed class AdminProductService(
             inventory.RegisterVariant(product.Variants[index].Id, request.Variants[index].InitialStock, request.Variants[index].LowStockThreshold);
         }
 
-        await db.SaveChangesAsync(cancellationToken);
+        try
+        {
+            await db.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateException) when (!cancellationToken.IsCancellationRequested)
+        {
+            // A unique index refused the insert after the checks above passed (another administrator saved the same slug
+            // or SKU at that moment). Repeating the checks reports the exact field, including the variant index.
+            if (await SlugTakenAsync(slug, null, cancellationToken))
+            {
+                throw SlugAllocator.SlugTaken();
+            }
+
+            await EnsureProductSkuFreeAsync(request.Sku, null, cancellationToken);
+            await EnsureVariantSkusFreeAsync(VariantSkuFields(request), null, cancellationToken);
+            throw;
+        }
+
         return await GetAsync(product.Id, cancellationToken);
     }
 
@@ -265,7 +282,7 @@ public sealed class AdminProductService(
             throw new ConflictException($"Proizvod može imati najviše {Product.MaxVariants} varijanti.");
         }
 
-        await EnsureVariantSkusFreeAsync([request.Sku!], null, cancellationToken);
+        await EnsureVariantSkusFreeAsync([(request.Sku, "sku")], null, cancellationToken);
 
         var nextPosition = product.CurrentVariants.Select(v => v.SortOrder + 1).DefaultIfEmpty(0).Max();
         var variant = product.AddVariant(request.ToValues(nextPosition), timeProvider.GetUtcNow());
@@ -283,7 +300,7 @@ public sealed class AdminProductService(
 
         if (!string.Equals(request.Sku!.Trim(), variant.Sku, StringComparison.Ordinal))
         {
-            await EnsureVariantSkusFreeAsync([request.Sku], variantId, cancellationToken);
+            await EnsureVariantSkusFreeAsync([(request.Sku, "sku")], variantId, cancellationToken);
         }
 
         if (!request.IsActive)
@@ -460,29 +477,43 @@ public sealed class AdminProductService(
     private Task<bool> SlugTakenAsync(string slug, Guid? exceptId, CancellationToken cancellationToken) =>
         db.Products.AnyAsync(p => p.Slug == slug && p.DeletedAt == null && p.Id != exceptId, cancellationToken);
 
+    /// <summary>409 <c>SKU_TAKEN</c> with <c>errors.sku</c> when the base SKU is used by another product that is not archived.</summary>
     private async Task EnsureProductSkuFreeAsync(string sku, Guid? exceptId, CancellationToken cancellationToken)
     {
         var trimmed = sku.Trim();
         if (await db.Products.AnyAsync(p => p.Sku == trimmed && p.DeletedAt == null && p.Id != exceptId, cancellationToken))
         {
-            throw SkuTaken(trimmed);
+            throw SkuTaken([(trimmed, "sku")]);
         }
     }
 
-    private async Task EnsureVariantSkusFreeAsync(IReadOnlyList<string> skus, Guid? exceptVariantId, CancellationToken cancellationToken)
+    /// <summary>
+    /// 409 <c>SKU_TAKEN</c> when any of the variant SKUs is used by another variant that is not archived. The <c>errors</c>
+    /// map has one entry per taken SKU under its field path (<c>sku</c>, or <c>variants[i].sku</c> in a create-product request).
+    /// </summary>
+    private async Task EnsureVariantSkusFreeAsync(
+        IReadOnlyList<(string Sku, string Field)> skus, Guid? exceptVariantId, CancellationToken cancellationToken)
     {
-        var trimmed = skus.Select(s => s.Trim()).ToList();
+        var trimmed = skus.Select(s => s.Sku.Trim()).Distinct(StringComparer.Ordinal).ToList();
         var taken = await db.ProductVariants
             .Where(v => trimmed.Contains(v.Sku) && v.DeletedAt == null && v.Id != exceptVariantId)
             .Select(v => v.Sku)
-            .FirstOrDefaultAsync(cancellationToken);
+            .ToListAsync(cancellationToken);
 
-        if (taken is not null)
+        if (taken.Count > 0)
         {
-            throw SkuTaken(taken);
+            throw SkuTaken([.. skus.Select(s => (Sku: s.Sku.Trim(), s.Field)).Where(s => taken.Contains(s.Sku, StringComparer.Ordinal))]);
         }
     }
 
-    private static ConflictException SkuTaken(string sku) =>
-        new($"Šifra (SKU) „{sku}“ se već koristi. Izaberite drugu.", ErrorCodes.SkuTaken, ErrorTexts.SkuTakenTitle);
+    private static IReadOnlyList<(string Sku, string Field)> VariantSkuFields(CreateProductRequest request) =>
+        [.. request.Variants.Select((variant, index) => (variant.Sku, $"variants[{index}].sku"))];
+
+    private static string SkuTakenMessage(string sku) => $"Šifra (SKU) „{sku}“ se već koristi. Izaberite drugu.";
+
+    private static ConflictException SkuTaken(IReadOnlyList<(string Sku, string Field)> taken) => new(
+        SkuTakenMessage(taken[0].Sku),
+        ErrorCodes.SkuTaken,
+        ErrorTexts.SkuTakenTitle,
+        taken.ToDictionary(t => t.Field, t => new[] { SkuTakenMessage(t.Sku) }, StringComparer.Ordinal));
 }

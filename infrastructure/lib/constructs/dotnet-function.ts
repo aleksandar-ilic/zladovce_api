@@ -22,20 +22,30 @@ export interface DotnetFunctionProps {
   readonly logRetentionDays: number;
   readonly retainLogs: boolean;
   readonly environment: Record<string, string>;
-  readonly vpc: ec2.IVpc;
-  readonly securityGroup: ec2.ISecurityGroup;
+  /**
+   * VPC placement (private subnets with egress) and security group. Omit both for a function that needs neither the
+   * database nor anything else inside the VPC (it then also gets no EC2 network-interface permissions).
+   */
+  readonly vpc?: ec2.IVpc;
+  readonly securityGroup?: ec2.ISecurityGroup;
   /** Extra least-privilege statements for the execution role. */
   readonly policyStatements?: iam.PolicyStatement[];
+  /** Asynchronous invocations: destination of events that still fail after the retries. */
+  readonly onFailure?: lambda.IDestination;
+  /** Asynchronous invocations: retries of a failed event (0-2). */
+  readonly retryAttempts?: number;
+  /** Asynchronous invocations: how long an event may wait for processing. */
+  readonly maxEventAge?: Duration;
 }
 
 /**
- * A .NET Lambda function (arm64) inside the VPC with:
+ * A .NET Lambda function (arm64), inside the VPC when `vpc` is given, with:
  *  - its own log group with retention,
  *  - its own execution role built from explicit statements (no AWS managed policies),
  *  - code from a backend publish directory, or the placeholder when that is missing.
  *
- * Reused for the API and the migration runner; later phases reuse it for the
- * outbox worker.
+ * Reused for the API, the migration runner and the image processor (outside the VPC);
+ * later phases reuse it for the outbox worker.
  */
 export class DotnetFunction extends Construct {
   public readonly function: lambda.Function;
@@ -49,6 +59,10 @@ export class DotnetFunction extends Construct {
     super(scope, id);
     const stack = Stack.of(this);
     this.functionName = props.functionName;
+    if ((props.vpc === undefined) !== (props.securityGroup === undefined)) {
+      throw new Error(`${props.functionName}: vpc and securityGroup must be given together.`);
+    }
+    const inVpc = props.vpc !== undefined;
 
     this.logGroup = new logs.LogGroup(this, 'LogGroup', {
       logGroupName: `/aws/lambda/${props.functionName}`,
@@ -78,25 +92,29 @@ export class DotnetFunction extends Construct {
             }),
           ],
         }),
-        VpcNetworking: new iam.PolicyDocument({
-          statements: [
-            // UNAVOIDABLE WILDCARD: Lambda's VPC networking uses these EC2 actions, which do not
-            // support resource-level permissions (same content as AWSLambdaVPCAccessExecutionRole,
-            // minus its account-wide CloudWatch Logs access).
-            new iam.PolicyStatement({
-              sid: 'ManageVpcNetworkInterfaces',
-              actions: [
-                'ec2:CreateNetworkInterface',
-                'ec2:DescribeNetworkInterfaces',
-                'ec2:DescribeSubnets',
-                'ec2:DeleteNetworkInterface',
-                'ec2:AssignPrivateIpAddresses',
-                'ec2:UnassignPrivateIpAddresses',
-              ],
-              resources: ['*'],
-            }),
-          ],
-        }),
+        ...(inVpc
+          ? {
+              VpcNetworking: new iam.PolicyDocument({
+                statements: [
+                  // UNAVOIDABLE WILDCARD: Lambda's VPC networking uses these EC2 actions, which do not
+                  // support resource-level permissions (same content as AWSLambdaVPCAccessExecutionRole,
+                  // minus its account-wide CloudWatch Logs access).
+                  new iam.PolicyStatement({
+                    sid: 'ManageVpcNetworkInterfaces',
+                    actions: [
+                      'ec2:CreateNetworkInterface',
+                      'ec2:DescribeNetworkInterfaces',
+                      'ec2:DescribeSubnets',
+                      'ec2:DeleteNetworkInterface',
+                      'ec2:AssignPrivateIpAddresses',
+                      'ec2:UnassignPrivateIpAddresses',
+                    ],
+                    resources: ['*'],
+                  }),
+                ],
+              }),
+            }
+          : {}),
         ...(props.policyStatements && props.policyStatements.length > 0
           ? { Application: new iam.PolicyDocument({ statements: props.policyStatements }) }
           : {}),
@@ -120,10 +138,17 @@ export class DotnetFunction extends Construct {
       reservedConcurrentExecutions: props.reservedConcurrency,
       role: this.role,
       logGroup: this.logGroup,
-      vpc: props.vpc,
-      vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
-      securityGroups: [props.securityGroup],
+      ...(inVpc
+        ? {
+            vpc: props.vpc,
+            vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
+            securityGroups: [props.securityGroup!],
+          }
+        : {}),
       environment: props.environment,
+      onFailure: props.onFailure,
+      retryAttempts: props.retryAttempts,
+      maxEventAge: props.maxEventAge,
     });
   }
 }

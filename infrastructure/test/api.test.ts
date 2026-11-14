@@ -72,8 +72,24 @@ describe('API Lambda', () => {
     ]) {
       expect(variables[key]).toBeDefined();
     }
+    // Uploads are processed by the image processor Lambda; attach waits up to 8 s for it.
+    expect(variables).toMatchObject({
+      Media__ProcessInline: 'false',
+      Media__ReadyWaitSeconds: '8',
+      Media__Region: 'eu-central-1',
+    });
+    // Optional; the backend default applies when not configured.
+    expect(variables.Catalog__MaxOrderQuantity).toBeUndefined();
     // Nothing that looks like a credential.
     expect(Object.keys(variables).some((key) => /password|secret|connectionstring/i.test(key))).toBe(false);
+  });
+
+  test('optional Catalog__MaxOrderQuantity and a different ready wait come from configuration', () => {
+    const custom = synth('dev', { api: { maxOrderQuantity: 12, mediaReadyWaitSeconds: 5 } });
+    expect(functionByName(custom.api, 'zladovce-dev-api').Properties.Environment.Variables).toMatchObject({
+      Catalog__MaxOrderQuantity: '12',
+      Media__ReadyWaitSeconds: '5',
+    });
   });
 
   test('ASPNETCORE_ENVIRONMENT is never Development in AWS', () => {
@@ -107,12 +123,20 @@ describe('API Lambda', () => {
     expect(connectResource).not.toContain('*');
 
     const s3 = statements.filter((s) => JSON.stringify(s.Action).includes('s3:'));
-    expect(s3).toHaveLength(2);
+    expect(s3).toHaveLength(3);
+    // Pre-signed POST is signed by this role: PutObject on uploads/* only.
     const put = s3.find((s) => s.Action === 's3:PutObject');
     expect(JSON.stringify(put.Resource)).toContain('/uploads/*');
+    // Attach reads the manifest, deleting an image removes its renditions: media/* only.
     const read = s3.find((s) => Array.isArray(s.Action));
     expect(read.Action.sort()).toEqual(['s3:DeleteObject', 's3:GetObject']);
     expect(JSON.stringify(read.Resource)).toContain('/media/*');
+    // 404 instead of 403 for a manifest that does not exist yet: ListBucket on the media bucket itself.
+    const list = s3.find((s) => s.Action === 's3:ListBucket');
+    expect(JSON.stringify(list.Resource)).toContain('MediaBucket');
+    expect(JSON.stringify(list.Resource)).not.toContain('/');
+    // The API never reads or deletes raw uploads.
+    expect(s3.some((s) => JSON.stringify(s.Resource).includes('/uploads/') && s.Action !== 's3:PutObject')).toBe(false);
 
     // The only "*" resource is the unavoidable VPC network-interface statement.
     const wildcard = statements.filter((s) => s.Resource === '*');
@@ -156,6 +180,9 @@ describe('migration runner Lambda', () => {
     expect(fn.Properties.Handler).toBe('Zladovce.Lambda::Zladovce.Lambda.MigrationRunner::HandleAsync');
     expect(fn.Properties.Runtime).toBe('dotnet10');
     expect(fn.Properties.VpcConfig.SubnetIds).toHaveLength(2);
+    // Private subnets with egress: Secrets Manager (bootstrap) is reached through the NAT.
+    expect(JSON.stringify(fn.Properties.VpcConfig.SubnetIds)).toContain('PrivateSubnet');
+    expect(JSON.stringify(fn.Properties.VpcConfig.SubnetIds)).not.toContain('PublicSubnet');
     expect(fn.Properties.Environment.Variables.Database__User).toBe('zladovce_migrator');
     expect(fn.Properties.ReservedConcurrentExecutions).toBe(1);
   });
@@ -168,9 +195,15 @@ describe('migration runner Lambda', () => {
     expect(statements.some((s) => JSON.stringify(s.Action).includes('s3:'))).toBe(false);
   });
 
-  test('master secret access is a switch', () => {
+  test('master secret access is a switch (and tells the pipeline whether to run the bootstrap)', () => {
     const withAccess = roleStatements(dev.migrations, 'MigrationsRole');
-    expect(withAccess.filter((s) => s.Action === 'secretsmanager:GetSecretValue')).toHaveLength(1);
+    const read = withAccess.filter((s) => s.Action === 'secretsmanager:GetSecretValue');
+    expect(read).toHaveLength(1);
+    // Exactly the master secret of the database stack, imported across stacks.
+    expect(JSON.stringify(read[0].Resource)).toContain('Fn::ImportValue');
+    expect(JSON.stringify(read[0].Resource)).toContain('Postgres');
+    expect(fn.Properties.Environment.Variables.Database__MasterSecretArn).toBeDefined();
+    dev.migrations.hasOutput('MigrationBootstrapEnabled', { Value: 'true' });
 
     const without = synth('dev', { database: { migrationRunnerCanReadMasterSecret: false } });
     const statements = roleStatements(without.migrations, 'MigrationsRole');
@@ -178,6 +211,7 @@ describe('migration runner Lambda', () => {
     expect(
       functionByName(without.migrations, 'zladovce-dev-migrations').Properties.Environment.Variables.Database__MasterSecretArn,
     ).toBeUndefined();
+    without.migrations.hasOutput('MigrationBootstrapEnabled', { Value: 'false' });
   });
 
   test('is not reachable through API Gateway', () => {
@@ -263,10 +297,12 @@ describe('HTTP API', () => {
 describe('Lambda artifacts', () => {
   test('missing artifacts fall back to a placeholder with a warning', () => {
     const { environment } = buildApp('dev', {
-      api: { apiAssetPath: './does-not-exist/api', migrationAssetPath: './does-not-exist/lambda' },
+      api: { apiAssetPath: './does-not-exist/api', lambdaAssetPath: './does-not-exist/lambda' },
     });
     expect(environment.api.apiFunction.usesPlaceholderCode).toBe(true);
+    expect(environment.media.imageProcessor.usesPlaceholderCode).toBe(true);
     Annotations.fromStack(environment.api).hasWarning('*', Match.stringLikeRegexp('PLACEHOLDER LAMBDA CODE'));
+    Annotations.fromStack(environment.media).hasWarning('*', Match.stringLikeRegexp('PLACEHOLDER LAMBDA CODE'));
     const fn = functionByName(
       // eslint-disable-next-line @typescript-eslint/no-var-requires
       require('aws-cdk-lib/assertions').Template.fromStack(environment.api),
@@ -279,7 +315,7 @@ describe('Lambda artifacts', () => {
     expect(() =>
       buildApp(
         'dev',
-        { api: { apiAssetPath: './does-not-exist/api', migrationAssetPath: './does-not-exist/lambda' } },
+        { api: { apiAssetPath: './does-not-exist/api', lambdaAssetPath: './does-not-exist/lambda' } },
         { requireArtifacts: true },
       ),
     ).toThrow(/requireArtifacts=true/);
@@ -291,11 +327,13 @@ describe('Lambda artifacts', () => {
     try {
       const { environment } = buildApp(
         'dev',
-        { api: { apiAssetPath: directory, migrationAssetPath: directory } },
+        { api: { apiAssetPath: directory, lambdaAssetPath: directory } },
         { requireArtifacts: true },
       );
       expect(environment.api.apiFunction.usesPlaceholderCode).toBe(false);
+      // One Zladovce.Lambda package for both non-HTTP handlers.
       expect(environment.migrations.migrationFunction.usesPlaceholderCode).toBe(false);
+      expect(environment.media.imageProcessor.usesPlaceholderCode).toBe(false);
     } finally {
       fs.rmSync(directory, { recursive: true, force: true });
     }
