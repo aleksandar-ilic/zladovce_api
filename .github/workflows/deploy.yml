@@ -1,0 +1,165 @@
+# ======================================================================================
+# UNTESTED WORKFLOW
+#
+# This workflow has never been run: when it was written there was no AWS account, no
+# bootstrapped environment and no GitHub repository. Treat every step as a first draft
+# and expect to fix details on the first real run (start with staging).
+#
+# It is manual (workflow_dispatch) only. Automatic staging deploys from `main`
+# (docs/AWS_INFRASTRUCTURE.md W7) should be switched on only after it has been proven.
+#
+# Prerequisites (see infrastructure/README.md, "First-time deploy checklist"):
+#   - CDK bootstrap in the target account/region.
+#   - An IAM OIDC identity provider for token.actions.githubusercontent.com and a deploy
+#     role that trusts this repository (and, for production, the `production` environment)
+#     and may assume the CDK bootstrap roles. No long-lived AWS keys are stored anywhere.
+#   - GitHub environments `staging` and `production`, each with the variable
+#     AWS_DEPLOY_ROLE_ARN (and optionally AWS_REGION, default eu-central-1).
+#   - The `production` environment has "Required reviewers" configured = manual approval.
+# ======================================================================================
+name: Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target environment
+        required: true
+        type: choice
+        options:
+          - staging
+          - prod
+
+permissions:
+  id-token: write # GitHub OIDC -> AWS STS
+  contents: read
+
+concurrency:
+  group: deploy-${{ inputs.environment }}
+  cancel-in-progress: false
+
+env:
+  CDK_ENV: ${{ inputs.environment }}
+  STACK_PREFIX: ${{ inputs.environment == 'prod' && 'Zladovce-Prod' || 'Zladovce-Staging' }}
+
+jobs:
+  deploy:
+    name: Deploy to ${{ inputs.environment }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    # `production` must have required reviewers; the job waits here for approval.
+    environment: ${{ inputs.environment == 'prod' && 'production' || 'staging' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Set up Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: infrastructure/package-lock.json
+
+      # The backend has no packaging step of its own; the Lambda packages are produced here.
+      # Framework-dependent publish for the .NET 10 managed runtime on arm64.
+      - name: Publish API Lambda package
+        run: >
+          dotnet publish backend/src/Zladovce.Api -c Release -r linux-arm64
+          --self-contained false -o backend/artifacts/api
+
+      - name: Publish migration Lambda package
+        run: >
+          dotnet publish backend/src/Zladovce.Lambda -c Release -r linux-arm64
+          --self-contained false -o backend/artifacts/lambda
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'eu-central-1' }}
+          role-session-name: zladovce-deploy-${{ inputs.environment }}-${{ github.run_id }}
+
+      - name: Install CDK dependencies
+        working-directory: infrastructure
+        run: npm ci
+
+      # requireArtifacts=true: synthesis fails if a Lambda package is missing (no placeholder code).
+      - name: Show pending changes
+        working-directory: infrastructure
+        run: npx cdk diff --all -c env="$CDK_ENV" -c requireArtifacts=true || true
+
+      # Step 1: everything the migration runner needs (network, database) and the runner itself.
+      # The API stack is NOT deployed yet, so the running API version is untouched.
+      - name: Deploy migration runner (and its dependencies)
+        working-directory: infrastructure
+        run: >
+          npx cdk deploy "${STACK_PREFIX}-Migrations"
+          -c env="$CDK_ENV" -c requireArtifacts=true
+          --require-approval never --outputs-file outputs-migrations.json
+
+      # Step 2: apply database migrations (forward-only and backward-compatible, so the
+      # currently running API version keeps working).
+      - name: Run database migrations
+        working-directory: infrastructure
+        run: |
+          set -euo pipefail
+          FUNCTION_NAME=$(jq -r --arg stack "${STACK_PREFIX}-Migrations" '.[$stack].MigrationFunctionName' outputs-migrations.json)
+          echo "Invoking $FUNCTION_NAME"
+          aws lambda invoke \
+            --function-name "$FUNCTION_NAME" \
+            --cli-binary-format raw-in-base64-out \
+            --cli-read-timeout 330 \
+            --payload '{}' \
+            migration-result.json > migration-invoke.json
+          cat migration-invoke.json
+          cat migration-result.json
+          if [ "$(jq -r '.FunctionError // empty' migration-invoke.json)" != "" ]; then
+            echo "::error::Database migration failed"
+            exit 1
+          fi
+
+      # Step 3: the new API version and everything else.
+      - name: Deploy all stacks
+        working-directory: infrastructure
+        run: >
+          npx cdk deploy --all
+          -c env="$CDK_ENV" -c requireArtifacts=true
+          --require-approval never --outputs-file outputs.json
+
+      - name: Smoke test /health
+        working-directory: infrastructure
+        run: |
+          set -euo pipefail
+          API_URL=$(jq -r --arg stack "${STACK_PREFIX}-Api" '.[$stack].ApiUrl' outputs.json)
+          echo "Checking $API_URL/health"
+          for attempt in 1 2 3 4 5 6; do
+            STATUS=$(curl -s -o health.json -w '%{http_code}' --max-time 20 "$API_URL/health" || true)
+            if [ "$STATUS" = "200" ]; then
+              cat health.json
+              echo
+              echo "Health check passed"
+              exit 0
+            fi
+            echo "Attempt $attempt: HTTP $STATUS"
+            sleep 10
+          done
+          echo "::error::Health check failed for $API_URL/health"
+          exit 1
+
+      - name: Summary
+        if: always()
+        working-directory: infrastructure
+        run: |
+          {
+            echo "### Deploy to ${CDK_ENV}"
+            echo "Commit: \`${GITHUB_SHA}\`"
+            if [ -f outputs.json ]; then
+              echo '```json'
+              cat outputs.json
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

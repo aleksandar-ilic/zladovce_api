@@ -1,0 +1,13 @@
+# The Angular frontend is a separate repository (zladovce_web), checked out here locally.
+/frontend/
+
+# Editors and OS
+.vs/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Local environment files
+.env
+.env.*

@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend (.NET build + tests)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Build
+        run: dotnet build backend/Zladovce.sln -c Release
+
+      # Integration tests start PostgreSQL with Testcontainers; Docker is available on ubuntu-latest.
+      - name: Test
+        run: dotnet test backend/Zladovce.sln -c Release --no-build
+
+  # The frontend lives in https://github.com/aleksandar-ilic/zladovce_web and has its own CI.
+
+  infrastructure:
+    name: Infrastructure (CDK tests + offline synth)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: infrastructure
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: infrastructure/package-lock.json
+
+      - run: npm ci
+      - run: npm run build
+      - run: npm test
+
+      # Offline: no AWS credentials and no backend artifacts are needed (placeholder Lambda code is used).
+      - name: Synthesize (dev)
+        run: npx cdk synth -c env=dev --quiet

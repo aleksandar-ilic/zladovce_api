@@ -1,0 +1,71 @@
+# Local development services only (PostgreSQL and MinIO). These credentials are for development and must never be reused.
+# The project name is "zladovce-v2" so its volume never collides with volumes of other local projects.
+name: zladovce-v2
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: zladovce-v2-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: zladovce
+      POSTGRES_USER: zladovce
+      POSTGRES_PASSWORD: zladovce_dev
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U zladovce -d zladovce"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # S3-compatible object storage for product and category images (stands in for the AWS media bucket).
+  # API: http://localhost:9000   console: http://localhost:9001   (user "zladovce", password "zladovce_dev_minio")
+  # Images: MinIO no longer publishes its own container images, so the Chainguard builds of the same
+  # open-source server and client are used.
+  minio:
+    image: cgr.dev/chainguard/minio:latest
+    container_name: zladovce-v2-minio
+    restart: unless-stopped
+    user: "0"
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: zladovce
+      MINIO_ROOT_PASSWORD: zladovce_dev_minio
+      # MinIO has no per-bucket CORS; this is the server-wide allow-list (admin application only).
+      MINIO_API_CORS_ALLOW_ORIGIN: http://localhost:4201
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - miniodata:/data
+
+  # One-shot: creates the bucket (the client image has no shell, hence one container per command).
+  minio-create-bucket:
+    image: cgr.dev/chainguard/minio-client:latest
+    container_name: zladovce-v2-minio-create-bucket
+    depends_on:
+      minio:
+        condition: service_started
+    restart: on-failure
+    environment:
+      MC_HOST_local: http://zladovce:zladovce_dev_minio@minio:9000
+    command: ["mb", "--ignore-existing", "local/zladovce-media-dev"]
+
+  # One-shot: anonymous read for media/* only. uploads/* stays private, like on AWS where only
+  # media/* is reachable through CloudFront.
+  minio-public-media:
+    image: cgr.dev/chainguard/minio-client:latest
+    container_name: zladovce-v2-minio-public-media
+    depends_on:
+      minio-create-bucket:
+        condition: service_completed_successfully
+    restart: on-failure
+    environment:
+      MC_HOST_local: http://zladovce:zladovce_dev_minio@minio:9000
+    command: ["anonymous", "set", "download", "local/zladovce-media-dev/media/"]
+
+volumes:
+  pgdata:
+  miniodata:

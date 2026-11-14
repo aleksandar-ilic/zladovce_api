@@ -1,0 +1,13 @@
+node_modules/
+cdk.out/
+cdk.context.json
+*.js
+!jest.config.js
+*.d.ts
+*.tsbuildinfo
+coverage/
+outputs*.json
+.env
+.env.*
+migration-*.json
+health.json

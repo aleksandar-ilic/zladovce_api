@@ -1,0 +1,29 @@
+# Amplify Hosting build specification - STOREFRONT (prerendered static output).
+#
+# This file is the single source of the build spec: lib/stacks/frontend-stack.ts
+# reads it and sets it on the Amplify app. The Amplify app must have the
+# environment variable AMPLIFY_MONOREPO_APP_ROOT=frontend (the stack sets it).
+#
+# Must match the frontend workspace:
+#   - npm script:        build:storefront
+#   - output directory:  frontend/dist/storefront/browser
+version: 1
+applications:
+  - appRoot: frontend
+    frontend:
+      phases:
+        preBuild:
+          commands:
+            - nvm install 24
+            - nvm use 24
+            - npm ci
+        build:
+          commands:
+            - npm run build:storefront
+      artifacts:
+        baseDirectory: dist/storefront/browser
+        files:
+          - '**/*'
+      cache:
+        paths:
+          - .npm/**/*

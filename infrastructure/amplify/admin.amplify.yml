@@ -1,0 +1,29 @@
+# Amplify Hosting build specification - ADMIN (single-page application).
+#
+# This file is the single source of the build spec: lib/stacks/frontend-stack.ts
+# reads it and sets it on the Amplify app. The Amplify app must have the
+# environment variable AMPLIFY_MONOREPO_APP_ROOT=frontend (the stack sets it).
+#
+# Must match the frontend workspace:
+#   - npm script:        build:admin
+#   - output directory:  frontend/dist/admin/browser
+version: 1
+applications:
+  - appRoot: frontend
+    frontend:
+      phases:
+        preBuild:
+          commands:
+            - nvm install 24
+            - nvm use 24
+            - npm ci
+        build:
+          commands:
+            - npm run build:admin
+      artifacts:
+        baseDirectory: dist/admin/browser
+        files:
+          - '**/*'
+      cache:
+        paths:
+          - .npm/**/*
