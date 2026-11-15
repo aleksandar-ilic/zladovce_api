@@ -18,6 +18,7 @@ export interface SynthResult {
   readonly auth: Template;
   readonly media: Template;
   readonly migrations: Template;
+  readonly notifications: Template;
   readonly api: Template;
   readonly observability: Template;
   readonly frontend?: Template;
@@ -51,6 +52,7 @@ export function synth(envName: EnvName, overrides: ConfigOverrides = {}): SynthR
     auth: Template.fromStack(environment.auth),
     media: Template.fromStack(environment.media),
     migrations: Template.fromStack(environment.migrations),
+    notifications: Template.fromStack(environment.notifications),
     api: Template.fromStack(environment.api),
     observability: Template.fromStack(environment.observability),
     frontend: environment.frontend ? Template.fromStack(environment.frontend) : undefined,

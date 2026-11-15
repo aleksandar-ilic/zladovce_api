@@ -16,7 +16,7 @@ function acknowledge(scope: IConstruct, id: string, reason: string): void {
 }
 
 export function applyNagSuppressions(environment: ZladovceEnvironment): void {
-  const { config, network, database, auth, media, migrations, api } = environment;
+  const { config, network, database, auth, media, migrations, notifications, api } = environment;
 
   /* --------------------------------- Network --------------------------------- */
 
@@ -135,6 +135,15 @@ export function applyNagSuppressions(environment: ZladovceEnvironment): void {
       'a dead-letter queue of the dead-letter queue adds nothing. Messages are kept 14 days and alarmed on.',
   );
 
+  /* ------------------------------- Notifications ------------------------------ */
+
+  acknowledge(
+    notifications.trackingKeySecret,
+    'AwsSolutions-SMG4',
+    'The tracking-code key encrypts codes inside queued outbox rows, and the backend reads one key (no key versions). ' +
+      'Automatic rotation would make every queued e-mail undecryptable. Rotate by hand only with an empty outbox.',
+  );
+
   /* ----------------------------------- API ----------------------------------- */
 
   for (const route of api.unauthenticatedRoutes) {
@@ -150,7 +159,7 @@ export function applyNagSuppressions(environment: ZladovceEnvironment): void {
   // derived from construct ids in MediaStack; if those change, test/nag.test.ts fails and prints the new id.
   const mediaBucketArnExport = `${PROJECT_NAME}-${envTitle(config.envName)}-Media:ExportsOutputFnGetAttMediaBucketBCBB02BAArnB94B784B`;
 
-  for (const fn of [api.apiFunction, migrations.migrationFunction]) {
+  for (const fn of [api.apiFunction, migrations.migrationFunction, api.outboxWorker]) {
     acknowledge(
       fn.role,
       'AwsSolutions-IAM5[Resource::*]',
@@ -158,7 +167,7 @@ export function applyNagSuppressions(environment: ZladovceEnvironment): void {
     );
   }
   // The image processor runs outside the VPC and therefore has no Resource::* statement.
-  for (const fn of [api.apiFunction, migrations.migrationFunction, media.imageProcessor]) {
+  for (const fn of [api.apiFunction, migrations.migrationFunction, media.imageProcessor, api.outboxWorker]) {
     acknowledge(
       fn.role,
       `AwsSolutions-IAM5[Resource::arn:aws:logs:${config.region}:<AWS::AccountId>:log-group:/aws/lambda/${fn.functionName}:*]`,

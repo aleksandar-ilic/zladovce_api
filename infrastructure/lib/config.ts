@@ -40,9 +40,11 @@ export const DEFAULT_API_HANDLER = 'Zladovce.Api';
 export const DEFAULT_MIGRATION_HANDLER = 'Zladovce.Lambda::Zladovce.Lambda.MigrationRunner::HandleAsync';
 /** assembly::type::method - must match backend/src/Zladovce.Lambda/ImageProcessorFunction.cs. */
 export const DEFAULT_IMAGE_PROCESSOR_HANDLER = 'Zladovce.Lambda::Zladovce.Lambda.ImageProcessorFunction::HandleAsync';
+/** assembly::type::method - must match backend/src/Zladovce.Lambda/OutboxWorkerFunction.cs. */
+export const DEFAULT_OUTBOX_WORKER_HANDLER = 'Zladovce.Lambda::Zladovce.Lambda.OutboxWorkerFunction::HandleAsync';
 
 export const DEFAULT_API_ASSET_PATH = '../backend/artifacts/api';
-/** Publish directory of backend/src/Zladovce.Lambda: one package for every non-HTTP handler (migrations, images). */
+/** Publish directory of backend/src/Zladovce.Lambda: one package for every non-HTTP handler (migrations, images, outbox). */
 export const DEFAULT_LAMBDA_ASSET_PATH = '../backend/artifacts/lambda';
 
 /**
@@ -54,6 +56,26 @@ export const HTTP_API_INTEGRATION_TIMEOUT_SECONDS = 30;
 /** S3 key prefixes. The API may only presign uploads under `uploads/`; CloudFront only serves `media/`. */
 export const UPLOADS_PREFIX = 'uploads/';
 export const MEDIA_PREFIX = 'media/';
+
+/** HTTP API routes with their own (stricter) throttling. They are explicit routes because route settings need one. */
+export const TRACKING_LOOKUP_ROUTE_PATH = '/api/v1/tracking/lookup';
+export const CREATE_ORDER_ROUTE_PATH = '/api/v1/orders';
+
+/**
+ * Text of the log line the outbox worker writes when an e-mail becomes Dead after its last attempt
+ * (backend/src/Zladovce.Infrastructure/Notifications/EmailDispatcher.cs, template
+ * "Email {OutboxId} ({Template}) attempt {Attempt} failed; now {Status}." with Status = Dead).
+ * The CloudWatch Logs metric filter matches this phrase. Keep it in sync with the backend.
+ */
+export const OUTBOX_DEAD_LOG_TEXT = 'failed; now Dead';
+
+/**
+ * Marker in the initial value of the tracking-key secret. Secrets Manager cannot generate "base64 of exactly
+ * 32 bytes", so the secret is created as `{"status":"NOT-INITIALISED","filler":"<random>"}` and the real key is
+ * written once with `put-secret-value` (README, deploy.yml). The backend rejects this value (no "key" member), so the
+ * placeholder can never be used as a key by accident.
+ */
+export const TRACKING_KEY_PLACEHOLDER_MARKER = 'NOT-INITIALISED';
 
 /* -------------------------------------------------------------------------- */
 /* Types                                                                       */
@@ -181,6 +203,103 @@ export interface ApiConfig {
   readonly mediaReadyWaitSeconds: number;
   /** Optional `Catalog__MaxOrderQuantity` (cap of `maxOrderQuantity` in the shop). Unset = backend default (20). */
   readonly maxOrderQuantity?: number;
+  /** Stricter per-route throttling (HTTP API route settings) on top of the stage default. */
+  readonly routeThrottling: RouteThrottlingConfig;
+}
+
+export interface ThrottleConfig {
+  /** Steady-state requests per second. */
+  readonly rateLimit: number;
+  /** Burst (bucket size). */
+  readonly burstLimit: number;
+}
+
+export interface RouteThrottlingConfig {
+  /** `POST /api/v1/tracking/lookup`: coarse outer limit; the backend adds 10 / 10 min per IP and 300 / min overall. */
+  readonly trackingLookup: ThrottleConfig;
+  /** `POST /api/v1/orders` (checkout): the backend adds 5 / 10 min per IP. */
+  readonly createOrder: ThrottleConfig;
+}
+
+export interface StorefrontConfig {
+  /**
+   * `Storefront__BaseUrl`: public https URL of the shop, no trailing slash (links in e-mails, tracking page).
+   * Required by the backend outside Development, for the API and for the outbox worker.
+   */
+  readonly baseUrl: string;
+}
+
+export interface TrackingConfig {
+  /** Keep the tracking-key secret when the stack is deleted (production: queued e-mails stay decryptable). */
+  readonly retainKeyOnDelete: boolean;
+}
+
+/**
+ * Which SES identity an environment sends from. SES identities are ACCOUNT-LEVEL singletons per region (a domain can
+ * exist only once per account and region), and all three environments share one account. Exactly one environment
+ * (prod) creates the domain identity; the others import it by name or have none.
+ */
+export type SesIdentityConfig =
+  /** No identity, no configuration set, no SES permission (e-mail must be disabled). */
+  | { readonly mode: 'none' }
+  /** This environment creates and owns the domain identity (Easy DKIM, 2048-bit keys). */
+  | {
+      readonly mode: 'create';
+      readonly domain: string;
+      /**
+       * Optional Route 53 public hosted zone of the domain: when set, CDK creates the DKIM CNAME records. Without it the
+       * records are stack outputs to add at the DNS provider by hand. (MAIL FROM records are always added by hand.)
+       */
+      readonly hostedZone?: { readonly hostedZoneId: string; readonly zoneName: string };
+      /** Optional custom MAIL FROM domain, a sub-domain of `domain` (e.g. `mail.zladovce.com`). Needs MX + SPF records. */
+      readonly mailFromDomain?: string;
+    }
+  /** The identity is owned by another environment (prod) of the same account and only referenced by name. */
+  | { readonly mode: 'import'; readonly domain: string };
+
+export interface EmailConfig {
+  /**
+   * `Email__Enabled`. false: the outbox worker is still deployed and scheduled (it also purges the rate-limit windows)
+   * but sends nothing; rows stay Pending and go out once e-mail is enabled.
+   */
+  readonly enabled: boolean;
+  readonly identity: SesIdentityConfig;
+  /** `Email__FromAddress`: an address of the identity's domain. Required while `enabled`. */
+  readonly fromAddress?: string;
+  /** `Email__FromName` (backend default: the store name). */
+  readonly fromName?: string;
+  /** `Email__ReplyToAddress` (backend default: the store contact e-mail). */
+  readonly replyToAddress?: string;
+  /** `Email__LogoUrl`: absolute https URL of the logo shown in e-mails. */
+  readonly logoUrl?: string;
+  /**
+   * SES sandbox only: verified recipient addresses (identities verified by hand, see README). In the sandbox SES also
+   * authorises the RECIPIENT identity, so the worker may send to these identity ARNs too. Empty after production access.
+   */
+  readonly sandboxRecipients: string[];
+}
+
+export interface OutboxWorkerConfig {
+  readonly handler: string;
+  readonly memoryMb: number;
+  /** 60-120 s (backend recommendation; the row lease is 120 s). */
+  readonly timeoutSeconds: number;
+  /** `Email__Dispatcher__BatchSize`; undefined = backend default (50). */
+  readonly batchSize?: number;
+}
+
+export interface BudgetConfig {
+  /**
+   * The AWS Budget covers the WHOLE ACCOUNT (dev, staging and prod share it). Configure it in exactly one environment
+   * (prod) so that it exists once.
+   */
+  readonly monthlyLimitUsd: number;
+  /** Extra e-mail subscribers. The budget always notifies the environment's alarm topic as well. */
+  readonly notificationEmails: string[];
+  /** Notify when ACTUAL spend passes these percentages of the limit. */
+  readonly actualThresholdsPercent: number[];
+  /** Notify when FORECASTED spend passes this percentage. */
+  readonly forecastThresholdPercent?: number;
 }
 
 export interface ObservabilityConfig {
@@ -192,6 +311,15 @@ export interface ObservabilityConfig {
   readonly rdsCpuPercent: number;
   readonly rdsFreeStorageBytes: number;
   readonly rdsMaxConnections: number;
+  /**
+   * Alarms on the ACCOUNT-LEVEL SES reputation metrics (Reputation.BounceRate / ComplaintRate). They are the same for
+   * every environment of the shared account, so only one environment (prod) creates them.
+   */
+  readonly sesReputationAlarms: boolean;
+  /** Fraction, 0.05 = 5 % (SES reviews an account at 5 % and may pause sending at 10 %). */
+  readonly sesBounceRateThreshold: number;
+  /** Fraction, 0.001 = 0.1 % (SES reviews an account at 0.1 % and may pause sending at 0.5 %). */
+  readonly sesComplaintRateThreshold: number;
 }
 
 export interface AmplifyConfig {
@@ -224,6 +352,12 @@ export interface EnvironmentConfig {
   readonly api: ApiConfig;
   readonly observability: ObservabilityConfig;
   readonly amplify: AmplifyConfig;
+  readonly storefront: StorefrontConfig;
+  readonly tracking: TrackingConfig;
+  readonly email: EmailConfig;
+  readonly outboxWorker: OutboxWorkerConfig;
+  /** Account-level AWS Budget: set in prod only (one account for all environments). */
+  readonly budget?: BudgetConfig;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -289,6 +423,13 @@ const baseApi: Omit<ApiConfig, 'aspnetEnvironment' | 'logRetentionDays'> = {
   migrationTimeoutSeconds: 300,
   mediaReadyWaitSeconds: 8,
   maxOrderQuantity: undefined,
+  routeThrottling: {
+    // Above the backend's own global lookup limit (300 / min = 5 / s), so normal users get the backend's
+    // 429 RATE_LIMITED body; the gateway limit only stops floods before they reach Lambda and the database.
+    trackingLookup: { rateLimit: 10, burstLimit: 20 },
+    // A small shop takes a handful of orders per hour; the backend allows 5 per 10 minutes per IP.
+    createOrder: { rateLimit: 5, burstLimit: 10 },
+  },
 };
 
 const baseObservability: ObservabilityConfig = {
@@ -299,6 +440,19 @@ const baseObservability: ObservabilityConfig = {
   rdsCpuPercent: 80,
   rdsFreeStorageBytes: 2 * GIB,
   rdsMaxConnections: 60,
+  sesReputationAlarms: false,
+  sesBounceRateThreshold: 0.05,
+  sesComplaintRateThreshold: 0.001,
+};
+
+/** Sending domain. Its SES identity is created by prod only (see SesIdentityConfig). */
+export const EMAIL_DOMAIN = 'zladovce.com';
+
+const baseOutboxWorker: OutboxWorkerConfig = {
+  handler: DEFAULT_OUTBOX_WORKER_HANDLER,
+  memoryMb: 512,
+  timeoutSeconds: 90,
+  batchSize: undefined,
 };
 
 /** The frontend (storefront + admin Angular workspace) lives at the root of its own repository. */
@@ -337,6 +491,13 @@ const environments: Record<EnvName, EnvironmentConfig> = {
     },
     observability: baseObservability,
     amplify: { ...baseAmplify, branch: 'develop' },
+    // The backend requires an https URL outside Development. Dev has no public storefront yet and sends no e-mail,
+    // so the value only ends up in outbox payloads. Replace with the dev Amplify URL once it exists.
+    storefront: { baseUrl: 'https://dev.zladovce.com' },
+    tracking: { retainKeyOnDelete: false },
+    // No SES identity in dev: the worker runs with Email__Enabled=false (rows stay Pending, rate limits are purged).
+    email: { enabled: false, identity: { mode: 'none' }, sandboxRecipients: [] },
+    outboxWorker: baseOutboxWorker,
   },
 
   staging: {
@@ -359,6 +520,20 @@ const environments: Record<EnvName, EnvironmentConfig> = {
     api: { ...baseApi, aspnetEnvironment: 'Staging', logRetentionDays: 30 },
     observability: baseObservability,
     amplify: { ...baseAmplify, branch: 'main' },
+    storefront: { baseUrl: 'https://staging.zladovce.com' },
+    tracking: { retainKeyOnDelete: false },
+    email: {
+      enabled: true,
+      // Owned by prod (deploy Zladovce-Prod-Notifications first); staging only references it by name.
+      identity: { mode: 'import', domain: EMAIL_DOMAIN },
+      fromAddress: `staging-porudzbine@${EMAIL_DOMAIN}`,
+      fromName: 'Zladovce (staging)',
+      replyToAddress: undefined,
+      logoUrl: undefined,
+      // While the account is in the SES sandbox: verified test recipients (see README).
+      sandboxRecipients: [],
+    },
+    outboxWorker: baseOutboxWorker,
   },
 
   prod: {
@@ -384,8 +559,33 @@ const environments: Record<EnvName, EnvironmentConfig> = {
     auth: { ...baseAuth, retainOnDelete: true },
     media: { ...baseMedia, retainOnDelete: true },
     api: { ...baseApi, aspnetEnvironment: 'Production', logRetentionDays: 90 },
-    observability: baseObservability,
+    observability: { ...baseObservability, sesReputationAlarms: true },
     amplify: { ...baseAmplify, branch: 'production', cspReportOnly: true },
+    storefront: { baseUrl: 'https://zladovce.com' },
+    tracking: { retainKeyOnDelete: true },
+    email: {
+      enabled: true,
+      identity: {
+        mode: 'create',
+        domain: EMAIL_DOMAIN,
+        // Route 53 is not decided: the DKIM and MAIL FROM records are stack outputs, added at the DNS provider by hand.
+        hostedZone: undefined,
+        mailFromDomain: `mail.${EMAIL_DOMAIN}`,
+      },
+      fromAddress: `porudzbine@${EMAIL_DOMAIN}`,
+      fromName: undefined, // backend default: the store name from the store settings
+      replyToAddress: undefined, // backend default: the store contact e-mail
+      logoUrl: undefined, // e.g. a logo on the media domain once it exists (https only)
+      sandboxRecipients: [],
+    },
+    outboxWorker: baseOutboxWorker,
+    // Covers the whole account (dev + staging + prod, roughly 3 x 30-40 USD, docs/AWS_INFRASTRUCTURE.md W10).
+    budget: {
+      monthlyLimitUsd: 120,
+      notificationEmails: [],
+      actualThresholdsPercent: [80, 100],
+      forecastThresholdPercent: 100,
+    },
   },
 };
 
@@ -543,8 +743,92 @@ export function validateConfig(config: EnvironmentConfig): void {
   if (config.media.processorTimeoutSeconds < 1 || config.media.processorTimeoutSeconds > 900) {
     errors.push('media.processorTimeoutSeconds must be between 1 and 900.');
   }
+  errors.push(...validateNotifications(config));
 
   if (errors.length > 0) {
     throw new Error(`Invalid configuration for '${config.envName}':\n - ${errors.join('\n - ')}`);
   }
+}
+
+const HTTPS_URL = /^https:\/\/[^/?#\s]+(\/[^?#\s]*)?$/;
+const EMAIL_ADDRESS = /^[^@\s]+@([^@\s]+\.[^@\s]+)$/;
+const DOMAIN_NAME = /^(?!-)[a-z0-9-]+(\.[a-z0-9-]+)+$/;
+
+/** The domain of the SES identity, or undefined for `mode: 'none'`. */
+export function emailIdentityDomain(config: EnvironmentConfig): string | undefined {
+  return config.email.identity.mode === 'none' ? undefined : config.email.identity.domain;
+}
+
+/** Name of the environment's SES configuration set (exists whenever the environment has an identity). */
+export function configurationSetName(config: EnvironmentConfig): string | undefined {
+  return emailIdentityDomain(config) === undefined ? undefined : `${resourcePrefix(config)}-email`;
+}
+
+function validateNotifications(config: EnvironmentConfig): string[] {
+  const errors: string[] = [];
+  const { storefront, email, outboxWorker, budget, api } = config;
+
+  if (!HTTPS_URL.test(storefront.baseUrl) || storefront.baseUrl.endsWith('/')) {
+    errors.push(`storefront.baseUrl '${storefront.baseUrl}' must be an absolute https URL without trailing slash, query or fragment.`);
+  }
+
+  const identity = email.identity;
+  if (identity.mode !== 'none') {
+    if (!DOMAIN_NAME.test(identity.domain)) errors.push(`email.identity.domain '${identity.domain}' is not a domain name.`);
+    if (identity.mode === 'create') {
+      if (identity.mailFromDomain !== undefined && !identity.mailFromDomain.endsWith(`.${identity.domain}`)) {
+        errors.push(`email.identity.mailFromDomain '${identity.mailFromDomain}' must be a sub-domain of '${identity.domain}'.`);
+      }
+      const zone = identity.hostedZone;
+      if (zone && identity.domain !== zone.zoneName && !identity.domain.endsWith(`.${zone.zoneName}`)) {
+        errors.push(`email.identity.hostedZone '${zone.zoneName}' does not contain '${identity.domain}'.`);
+      }
+    }
+  }
+  if (email.enabled) {
+    if (identity.mode === 'none') errors.push("email.enabled requires an SES identity (email.identity.mode 'create' or 'import').");
+    if (!email.fromAddress) errors.push('email.fromAddress is required while email.enabled is true.');
+  }
+  if (email.fromAddress !== undefined) {
+    const match = EMAIL_ADDRESS.exec(email.fromAddress);
+    if (!match) {
+      errors.push(`email.fromAddress '${email.fromAddress}' is not an e-mail address.`);
+    } else if (identity.mode !== 'none' && match[1].toLowerCase() !== identity.domain) {
+      errors.push(`email.fromAddress '${email.fromAddress}' must be an address of the identity domain '${identity.domain}'.`);
+    }
+  }
+  for (const address of [email.replyToAddress, ...email.sandboxRecipients]) {
+    if (address !== undefined && !EMAIL_ADDRESS.test(address)) errors.push(`'${address}' is not an e-mail address.`);
+  }
+  if (email.sandboxRecipients.length > 0 && identity.mode === 'none') {
+    errors.push('email.sandboxRecipients needs an SES identity.');
+  }
+  if (email.logoUrl !== undefined && !HTTPS_URL.test(email.logoUrl)) {
+    errors.push(`email.logoUrl '${email.logoUrl}' must be an absolute https URL.`);
+  }
+
+  if (!Number.isInteger(outboxWorker.timeoutSeconds) || outboxWorker.timeoutSeconds < 60 || outboxWorker.timeoutSeconds > 120) {
+    errors.push('outboxWorker.timeoutSeconds must be a whole number between 60 and 120 (the e-mail lease is 120 s).');
+  }
+  if (outboxWorker.batchSize !== undefined && (!Number.isInteger(outboxWorker.batchSize) || outboxWorker.batchSize < 1)) {
+    errors.push('outboxWorker.batchSize must be a whole number, 1 or more (or undefined).');
+  }
+
+  for (const [name, throttle] of Object.entries(api.routeThrottling)) {
+    if (!(throttle.rateLimit > 0) || !Number.isInteger(throttle.burstLimit) || throttle.burstLimit < 1) {
+      errors.push(`api.routeThrottling.${name} needs a positive rateLimit and a whole burstLimit of 1 or more.`);
+    }
+  }
+
+  if (budget) {
+    if (!(budget.monthlyLimitUsd > 0)) errors.push('budget.monthlyLimitUsd must be positive.');
+    if (budget.notificationEmails.some((address) => !EMAIL_ADDRESS.test(address))) {
+      errors.push('budget.notificationEmails must contain e-mail addresses only.');
+    }
+    const thresholds = [...budget.actualThresholdsPercent, ...(budget.forecastThresholdPercent ? [budget.forecastThresholdPercent] : [])];
+    if (thresholds.length === 0 || thresholds.some((value) => !(value > 0) || value > 1000)) {
+      errors.push('budget needs at least one threshold, each between 0 and 1000 percent.');
+    }
+  }
+  return errors;
 }

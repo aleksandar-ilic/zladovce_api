@@ -8,6 +8,7 @@ import { FrontendStack } from './stacks/frontend-stack';
 import { MediaStack } from './stacks/media-stack';
 import { MigrationStack } from './stacks/migration-stack';
 import { NetworkStack } from './stacks/network-stack';
+import { NotificationsStack } from './stacks/notifications-stack';
 import { ObservabilityStack } from './stacks/observability-stack';
 
 export interface ZladovceEnvironmentOptions {
@@ -22,6 +23,7 @@ export interface ZladovceEnvironment {
   readonly auth: AuthStack;
   readonly media: MediaStack;
   readonly migrations: MigrationStack;
+  readonly notifications: NotificationsStack;
   readonly api: ApiStack;
   readonly observability: ObservabilityStack;
   readonly frontend?: FrontendStack;
@@ -34,10 +36,12 @@ export interface ZladovceEnvironment {
  *   Network  <- Database <- Api <- Observability
  *   Auth     <------------- Api <- Frontend (optional)
  *   Media    <------------- Api
+ *   Notifications <-------- Api (tracking-key secret, SES identity / configuration set)
  *   Media    <------------------- Observability (image processor function and dead-letter queue)
  *
  * so there are no cyclic cross-stack references. The image processor and its S3 trigger are inside
- * the Media stack for exactly that reason (see MediaStack).
+ * the Media stack for exactly that reason (see MediaStack). Notifications has no dependencies, so the
+ * pipeline can deploy it (and check the tracking key) before the API stack.
  */
 export function createZladovceEnvironment(
   app: App,
@@ -91,6 +95,12 @@ export function createZladovceEnvironment(
     database,
   });
 
+  const notifications = new NotificationsStack(app, stackName('Notifications'), {
+    ...common,
+    description: `Zladovce ${config.envName}: tracking-code key secret, SES identity and configuration set`,
+    config,
+  });
+
   const api = new ApiStack(app, stackName('Api'), {
     ...common,
     description: `Zladovce ${config.envName}: API Lambda and HTTP API`,
@@ -104,6 +114,7 @@ export function createZladovceEnvironment(
     jwtIssuerUrl: auth.issuerUrl,
     mediaBucket: media.bucket,
     mediaBaseUrl: media.mediaBaseUrl,
+    notifications,
   });
 
   const observability = new ObservabilityStack(app, stackName('Observability'), {
@@ -115,6 +126,7 @@ export function createZladovceEnvironment(
     migrationFunction: migrations.migrationFunction.function,
     imageProcessorFunction: media.imageProcessor.function,
     imageProcessorDeadLetterQueue: media.imageProcessorDeadLetterQueue,
+    outboxWorker: api.outboxWorker,
     databaseInstance: database.instance,
     natInstanceIds: network.natInstanceIds,
   });
@@ -132,7 +144,17 @@ export function createZladovceEnvironment(
       })
     : undefined;
 
-  const stacks = [network, database, auth, media, migrations, api, observability, ...(frontend ? [frontend] : [])];
+  const stacks = [
+    network,
+    database,
+    auth,
+    media,
+    migrations,
+    notifications,
+    api,
+    observability,
+    ...(frontend ? [frontend] : []),
+  ];
   for (const stack of stacks) {
     // AWS::RDS::DBProxyTargetGroup does not accept tags (CloudFormation schema validation fails).
     const tagOptions = { excludeResourceTypes: ['AWS::RDS::DBProxyTargetGroup'] };
@@ -147,6 +169,7 @@ export function createZladovceEnvironment(
     auth,
     media,
     migrations,
+    notifications,
     api,
     observability,
     frontend,

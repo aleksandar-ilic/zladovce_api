@@ -45,7 +45,8 @@ describe('observability', () => {
       MetricName: 'StatusCheckFailed',
       TreatMissingData: 'breaching',
     });
-    expect(alarms).toHaveLength(11);
+    // + 5 outbox worker alarms (no SES reputation alarms outside prod).
+    expect(alarms).toHaveLength(16);
   });
 
   test('image processor: errors and dead-lettered uploads', () => {
@@ -89,6 +90,8 @@ describe('tags, outputs and stack settings', () => {
     expectTags(onlyResource(dev.media, 'AWS::S3::Bucket').resource, 'dev');
     expectTags(onlyResource(prod.media, 'AWS::CloudFront::Distribution').resource, 'prod');
     expectTags(onlyResource(prod.observability, 'AWS::SNS::Topic').resource, 'prod');
+    expectTags(onlyResource(prod.notifications, 'AWS::SecretsManager::Secret').resource, 'prod');
+    expectTags(onlyResource(prod.notifications, 'AWS::SES::ConfigurationSet').resource, 'prod');
     for (const fn of [
       ...Object.values(prod.api.findResources('AWS::Lambda::Function')),
       ...Object.values(prod.migrations.findResources('AWS::Lambda::Function')),
@@ -126,7 +129,7 @@ describe('tags, outputs and stack settings', () => {
       const { app } = buildApp(envName);
       const assembly = app.synth();
       expect(assembly.manifest.missing ?? []).toEqual([]);
-      expect(assembly.stacks.map((stack) => stack.stackName)).toHaveLength(7);
+      expect(assembly.stacks.map((stack) => stack.stackName)).toHaveLength(8);
     }
   });
 

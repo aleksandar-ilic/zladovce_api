@@ -44,8 +44,7 @@ export interface DotnetFunctionProps {
  *  - its own execution role built from explicit statements (no AWS managed policies),
  *  - code from a backend publish directory, or the placeholder when that is missing.
  *
- * Reused for the API, the migration runner and the image processor (outside the VPC);
- * later phases reuse it for the outbox worker.
+ * Reused for the API, the migration runner, the image processor (outside the VPC) and the outbox worker.
  */
 export class DotnetFunction extends Construct {
   public readonly function: lambda.Function;

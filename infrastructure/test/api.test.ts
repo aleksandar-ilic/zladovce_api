@@ -80,8 +80,15 @@ describe('API Lambda', () => {
     });
     // Optional; the backend default applies when not configured.
     expect(variables.Catalog__MaxOrderQuantity).toBeUndefined();
-    // Nothing that looks like a credential.
-    expect(Object.keys(variables).some((key) => /password|secret|connectionstring/i.test(key))).toBe(false);
+    // Tracking codes: storefront links and the key's secret ARN (never the key itself); no in-process dispatcher.
+    expect(variables.Storefront__BaseUrl).toBe('https://dev.zladovce.com');
+    expect(JSON.stringify(variables.Tracking__TokenEncryptionKeySecretArn)).toContain('TrackingKeySecret');
+    expect(variables.Email__Dispatcher__RunInProcess).toBe('false');
+    expect(variables.Tracking__TokenEncryptionKey).toBeUndefined();
+    // Nothing that looks like a credential (secret ARNs are references, not values).
+    expect(
+      Object.keys(variables).some((key) => /password|secret|connectionstring/i.test(key) && !key.endsWith('SecretArn')),
+    ).toBe(false);
   });
 
   test('optional Catalog__MaxOrderQuantity and a different ready wait come from configuration', () => {
@@ -148,8 +155,12 @@ describe('API Lambda', () => {
       const actions: string[] = Array.isArray(statement.Action) ? statement.Action : [statement.Action];
       expect(actions.some((action) => action.includes('*'))).toBe(false);
     }
-    // The API cannot read any secret.
-    expect(statements.some((s) => JSON.stringify(s.Action).includes('secretsmanager'))).toBe(false);
+    // The only secret the API can read is the tracking-code key; it cannot send e-mail.
+    const secretStatements = statements.filter((s) => JSON.stringify(s.Action).includes('secretsmanager'));
+    expect(secretStatements).toHaveLength(1);
+    expect(secretStatements[0].Action).toBe('secretsmanager:GetSecretValue');
+    expect(JSON.stringify(secretStatements[0].Resource)).toMatch(/^\{"Fn::ImportValue":"Zladovce-Dev-Notifications:.*TrackingKeySecret.*"\}$/);
+    expect(statements.some((s) => JSON.stringify(s.Action).includes('ses:'))).toBe(false);
   });
 
   test('log retention: 30 days outside production, 90 days in production', () => {
@@ -219,8 +230,8 @@ describe('migration runner Lambda', () => {
     expect(JSON.stringify(resource.Properties.IntegrationUri)).not.toContain('Migrations');
     dev.migrations.resourceCountIs('AWS::Lambda::Permission', 0);
     dev.migrations.resourceCountIs('AWS::Lambda::Url', 0);
-    // The API stack contains the API function only.
-    dev.api.resourceCountIs('AWS::Lambda::Function', 1);
+    // The API stack contains the API function and the outbox worker only.
+    dev.api.resourceCountIs('AWS::Lambda::Function', 2);
   });
 });
 
@@ -252,13 +263,43 @@ describe('HTTP API', () => {
     expect(publicRoute.Properties.AuthorizerId).toBeUndefined();
   });
 
-  test('the only other unauthenticated route is the admin CORS preflight', () => {
+  test('the other unauthenticated routes are the admin CORS preflight and the two throttled public routes', () => {
     expect(routes.map((r) => r.Properties.RouteKey).sort()).toEqual([
       'ANY /api/v1/admin/{proxy+}',
       'ANY /{proxy+}',
       'OPTIONS /api/v1/admin/{proxy+}',
+      'POST /api/v1/orders',
+      'POST /api/v1/tracking/lookup',
     ]);
-    expect(route('OPTIONS /api/v1/admin/{proxy+}').Properties.AuthorizationType).toBe('NONE');
+    for (const key of ['OPTIONS /api/v1/admin/{proxy+}', 'POST /api/v1/orders', 'POST /api/v1/tracking/lookup']) {
+      expect(route(key).Properties.AuthorizationType).toBe('NONE');
+    }
+    // Same integration as everything else.
+    expect(route('POST /api/v1/orders').Properties.Target).toEqual(route('ANY /{proxy+}').Properties.Target);
+  });
+
+  test('per-route throttling on tracking lookup and checkout, after the routes exist', () => {
+    const stages = dev.api.findResources('AWS::ApiGatewayV2::Stage');
+    const [stage] = Object.values(stages) as any[];
+    expect(stage.Properties.RouteSettings).toEqual({
+      'POST /api/v1/tracking/lookup': { ThrottlingRateLimit: 10, ThrottlingBurstLimit: 20 },
+      'POST /api/v1/orders': { ThrottlingRateLimit: 5, ThrottlingBurstLimit: 10 },
+    });
+    const routeIds = Object.entries(dev.api.findResources('AWS::ApiGatewayV2::Route'))
+      .filter(([, r]: [string, any]) => r.Properties.RouteKey.startsWith('POST '))
+      .map(([id]) => id);
+    expect(routeIds).toHaveLength(2);
+    for (const id of routeIds) expect(stage.DependsOn).toContain(id);
+
+    const custom = synth('dev', {
+      api: { routeThrottling: { trackingLookup: { rateLimit: 2, burstLimit: 4 }, createOrder: { rateLimit: 1, burstLimit: 2 } } },
+    });
+    custom.api.hasResourceProperties('AWS::ApiGatewayV2::Stage', {
+      RouteSettings: {
+        'POST /api/v1/tracking/lookup': { ThrottlingRateLimit: 2, ThrottlingBurstLimit: 4 },
+        'POST /api/v1/orders': { ThrottlingRateLimit: 1, ThrottlingBurstLimit: 2 },
+      },
+    });
   });
 
   test('no gateway-level CORS (handled by the application)', () => {
@@ -331,9 +372,10 @@ describe('Lambda artifacts', () => {
         { requireArtifacts: true },
       );
       expect(environment.api.apiFunction.usesPlaceholderCode).toBe(false);
-      // One Zladovce.Lambda package for both non-HTTP handlers.
+      // One Zladovce.Lambda package for every non-HTTP handler.
       expect(environment.migrations.migrationFunction.usesPlaceholderCode).toBe(false);
       expect(environment.media.imageProcessor.usesPlaceholderCode).toBe(false);
+      expect(environment.api.outboxWorker.usesPlaceholderCode).toBe(false);
     } finally {
       fs.rmSync(directory, { recursive: true, force: true });
     }

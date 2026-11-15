@@ -16,6 +16,13 @@
 #   - GitHub environments `staging` and `production`, each with the variable
 #     AWS_DEPLOY_ROLE_ARN (and optionally AWS_REGION, default eu-central-1).
 #   - The `production` environment has "Required reviewers" configured = manual approval.
+#   - The deploy role may also read and write the tracking-key secret of the environment
+#     (secretsmanager:GetSecretValue + PutSecretValue on
+#     arn:aws:secretsmanager:<region>:<account>:secret:zladovce/<env>/tracking-token-key-*) and invoke
+#     the outbox worker (lambda:InvokeFunction on zladovce-<env>-outbox-worker), see step 2 and the
+#     smoke tests.
+#   - Staging sends e-mail through the SES domain identity owned by prod (one shared account):
+#     deploy Zladovce-Prod-Notifications once before staging can send (see infrastructure/README.md).
 #
 # The frontend is NOT built or deployed here: it lives in its own repository
 # (https://github.com/aleksandar-ilic/zladovce_web) and is deployed by Amplify Hosting
@@ -75,9 +82,10 @@ jobs:
           dotnet publish backend/src/Zladovce.Api -c Release -r linux-arm64
           --self-contained false -o backend/artifacts/api
 
-      # One package for every non-HTTP handler: the migration runner (Migrations stack) and the
-      # image processor (Media stack). Path = lambdaAssetPath in infrastructure/lib/config.ts.
-      - name: Publish Lambda package (migration runner, image processor)
+      # One package for every non-HTTP handler: the migration runner (Migrations stack), the image
+      # processor (Media stack) and the outbox worker (Api stack). Path = lambdaAssetPath in
+      # infrastructure/lib/config.ts.
+      - name: Publish Lambda package (migration runner, image processor, outbox worker)
         run: >
           dotnet publish backend/src/Zladovce.Lambda -c Release -r linux-arm64
           --self-contained false -o backend/artifacts/lambda
@@ -98,7 +106,68 @@ jobs:
         working-directory: infrastructure
         run: npx cdk diff --all -c env="$CDK_ENV" -c requireArtifacts=true || true
 
-      # Step 1: everything the migration runner needs (network, database) and the runner itself.
+      # Step 1: the tracking-key secret and SES identity / configuration set. The stack has no
+      # dependencies and must exist (with a valid key) before the API is deployed.
+      - name: Deploy notifications stack (tracking key, SES)
+        working-directory: infrastructure
+        run: >
+          npx cdk deploy "${STACK_PREFIX}-Notifications"
+          -c env="$CDK_ENV" -c requireArtifacts=true
+          --require-approval never --outputs-file outputs-notifications.json
+
+      # Step 2: the tracking-code key. CloudFormation creates the secret with a placeholder
+      # ({"status":"NOT-INITIALISED",...}) because Secrets Manager cannot generate "base64 of
+      # exactly 32 bytes". While the placeholder is there, this step writes a fresh random key ONCE
+      # (nothing can have been encrypted with the placeholder: the backend rejects it). Any other
+      # invalid value fails the deployment BEFORE the API is touched - fix it by hand (README).
+      # The value is never printed.
+      - name: Verify (or initialise) the tracking-code key
+        working-directory: infrastructure
+        run: |
+          set -euo pipefail
+          STACK="${STACK_PREFIX}-Notifications"
+          SECRET_ID=$(jq -r --arg stack "$STACK" '.[$stack].TrackingKeySecretName' outputs-notifications.json)
+
+          # Exit code 0 = valid key, 2 = untouched placeholder, 1 = anything else (including the
+          # public development key).
+          check() {
+            aws secretsmanager get-secret-value --secret-id "$SECRET_ID" --query SecretString --output text \
+              | python3 -c '
+          import base64, binascii, json, sys
+          value = sys.stdin.read().strip()
+          if value.startswith("{"):
+              document = json.loads(value)
+              if document.get("status") == "NOT-INITIALISED" and "key" not in document:
+                  sys.exit(2)
+              value = str(document.get("key") or "").strip()
+          # The public development key from backend/src/Zladovce.Api/appsettings.Development.json.
+          if value == "ZGV2LW9ubHktdHJhY2tpbmcta2V5LTMyLWJ5dGVzISE=":
+              sys.exit(1)
+          try:
+              ok = len(base64.b64decode(value, validate=True)) == 32
+          except (binascii.Error, ValueError):
+              ok = False
+          sys.exit(0 if ok else 1)
+          '
+          }
+
+          status=0; check || status=$?
+          if [ "$status" = "2" ]; then
+            echo "Tracking key of $SECRET_ID is still the placeholder; writing a new random key."
+            KEY_FILE="$RUNNER_TEMP/tracking-key"
+            ( umask 077; openssl rand -base64 32 | tr -d '\n' > "$KEY_FILE" )
+            aws secretsmanager put-secret-value --secret-id "$SECRET_ID" \
+              --secret-string "file://$KEY_FILE" > /dev/null
+            rm -f "$KEY_FILE"
+            status=0; check || status=$?
+          fi
+          if [ "$status" != "0" ]; then
+            echo "::error::$SECRET_ID does not hold base64 of 32 bytes (or {\"key\":\"<base64>\"}). See infrastructure/README.md."
+            exit 1
+          fi
+          echo "Tracking key of $SECRET_ID is valid."
+
+      # Step 3: everything the migration runner needs (network, database) and the runner itself.
       # The API stack is NOT deployed yet, so the running API version is untouched.
       - name: Deploy migration runner (and its dependencies)
         working-directory: infrastructure
@@ -107,7 +176,7 @@ jobs:
           -c env="$CDK_ENV" -c requireArtifacts=true
           --require-approval never --outputs-file outputs-migrations.json
 
-      # Step 2: database roles, then migrations.
+      # Step 4: database roles, then migrations.
       #
       # {"action":"bootstrap"} creates/repairs the IAM-authenticated roles zladovce_migrator and
       # zladovce_app with the RDS-managed master secret. It is idempotent, so it runs on EVERY deploy
@@ -151,8 +220,8 @@ jobs:
           fi
           invoke migrate
 
-      # Step 3: the new API version and everything else (Media stack with the image processor and
-      # its S3 trigger, Observability alarms, ...).
+      # Step 5: the new API version, the outbox worker and its schedule, and everything else (Media
+      # stack with the image processor and its S3 trigger, Observability alarms, budget in prod, ...).
       - name: Deploy all stacks
         working-directory: infrastructure
         run: >
@@ -178,6 +247,32 @@ jobs:
             sleep 10
           done
           echo "::error::Health check failed for $API_URL/health"
+          exit 1
+
+      # One synchronous run of the outbox worker: proves its configuration (the backend validates
+      # e-mail/tracking settings at start), database access and tracking key. It does exactly what
+      # the scheduled run does (sends due e-mails), so it is safe in every environment. A scheduled
+      # run may hold the reserved concurrency of 1, hence the retries on throttling.
+      - name: Smoke test outbox worker
+        working-directory: infrastructure
+        run: |
+          set -euo pipefail
+          FUNCTION_NAME=$(jq -r --arg stack "${STACK_PREFIX}-Api" '.[$stack].OutboxWorkerFunctionName' outputs.json)
+          for attempt in 1 2 3 4; do
+            if aws lambda invoke --function-name "$FUNCTION_NAME" --cli-binary-format raw-in-base64-out \
+                 --cli-read-timeout 130 --payload '{}' worker-result.json > worker-invoke.json; then
+              cat worker-invoke.json; cat worker-result.json; echo
+              if [ "$(jq -r '.FunctionError // empty' worker-invoke.json)" != "" ]; then
+                echo "::error::Outbox worker run failed (see the function log)"
+                exit 1
+              fi
+              echo "Outbox worker run passed"
+              exit 0
+            fi
+            echo "Attempt $attempt: invoke failed (throttled while a scheduled run is active?)"
+            sleep 30
+          done
+          echo "::error::Could not invoke $FUNCTION_NAME"
           exit 1
 
       - name: Summary

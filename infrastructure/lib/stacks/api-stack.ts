@@ -1,10 +1,12 @@
-import { CfnOutput, Duration, RemovalPolicy, Stack, StackProps } from 'aws-cdk-lib';
+import { ArnFormat, CfnOutput, Duration, RemovalPolicy, Stack, StackProps } from 'aws-cdk-lib';
 import { AccessLogFormat } from 'aws-cdk-lib/aws-apigateway';
 import * as apigwv2 from 'aws-cdk-lib/aws-apigatewayv2';
 import { HttpJwtAuthorizer } from 'aws-cdk-lib/aws-apigatewayv2-authorizers';
 import { HttpLambdaIntegration } from 'aws-cdk-lib/aws-apigatewayv2-integrations';
 import * as acm from 'aws-cdk-lib/aws-certificatemanager';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
+import * as events from 'aws-cdk-lib/aws-events';
+import * as eventTargets from 'aws-cdk-lib/aws-events-targets';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as logs from 'aws-cdk-lib/aws-logs';
@@ -12,13 +14,17 @@ import * as s3 from 'aws-cdk-lib/aws-s3';
 import { Construct } from 'constructs';
 import {
   allCorsOrigins,
+  CREATE_ORDER_ROUTE_PATH,
   EnvironmentConfig,
   MEDIA_PREFIX,
   resourcePrefix,
+  ThrottleConfig,
+  TRACKING_LOOKUP_ROUTE_PATH,
   UPLOADS_PREFIX,
 } from '../config';
 import { DotnetFunction } from '../constructs/dotnet-function';
 import { DatabaseStack } from './database-stack';
+import { NotificationsStack } from './notifications-stack';
 
 export interface ApiStackProps extends StackProps {
   readonly config: EnvironmentConfig;
@@ -32,6 +38,8 @@ export interface ApiStackProps extends StackProps {
   readonly jwtIssuerUrl: string;
   readonly mediaBucket: s3.IBucket;
   readonly mediaBaseUrl: string;
+  /** Tracking-key secret and SES identity / configuration set. */
+  readonly notifications: NotificationsStack;
 }
 
 export const ADMIN_ROUTE = '/api/v1/admin/{proxy+}';
@@ -39,17 +47,23 @@ export const PUBLIC_ROUTE = '/{proxy+}';
 /** Alias the HTTP API invokes; move it back to a previous version to roll back code. */
 export const LIVE_ALIAS = 'live';
 
+/** Route keys with their own throttling (must be real routes: route settings for unknown keys fail to deploy). */
+export const TRACKING_LOOKUP_ROUTE_KEY = `POST ${TRACKING_LOOKUP_ROUTE_PATH}`;
+export const CREATE_ORDER_ROUTE_KEY = `POST ${CREATE_ORDER_ROUTE_PATH}`;
+
 /**
- * API Lambda (ASP.NET Core) and the HTTP API in front of it.
+ * API Lambda (ASP.NET Core), the HTTP API in front of it, and the outbox worker Lambda (EventBridge schedule) that
+ * sends the e-mails the API queues. The worker is here because it runs the same application version against the same
+ * schema: the pipeline deploys both together, after the migrations.
  * The migration runner lives in MigrationStack so that the pipeline can deploy and
  * run it BEFORE this stack publishes a new API version.
  *
- * Extension points (later phases): the outbox worker is another `DotnetFunction`
- * in this stack with an EventBridge schedule; SES and Cognito admin permissions
- * are added to `apiFunction.role`.
+ * Extension point (later phases): Cognito admin permissions are added to `apiFunction.role`.
  */
 export class ApiStack extends Stack {
   public readonly apiFunction: DotnetFunction;
+  public readonly outboxWorker: DotnetFunction;
+  public readonly outboxWorkerSchedule: events.Rule;
   public readonly apiAlias: lambda.Alias;
   public readonly httpApi: apigwv2.HttpApi;
   public readonly stage: apigwv2.HttpStage;
@@ -60,9 +74,34 @@ export class ApiStack extends Stack {
 
   constructor(scope: Construct, id: string, props: ApiStackProps) {
     super(scope, id, props);
-    const { config, database } = props;
+    const { config, database, notifications } = props;
     const prefix = resourcePrefix(config);
     const db = config.database;
+
+    // Same database settings for the API and the outbox worker: the app role, IAM authentication.
+    const databaseEnvironment: Record<string, string> = {
+      Database__Host: database.appEndpointAddress,
+      Database__Port: database.port,
+      Database__Name: db.databaseName,
+      Database__User: db.appUser,
+      Database__UseIamAuth: 'true',
+      Database__Region: this.region,
+      Database__MaxPoolSize: String(config.api.dbMaxPoolSize),
+    };
+    // Every order writes an encrypted tracking code and links into the outbox, so the API needs these as well as the
+    // worker (the backend refuses to start without them outside Development). The in-process dispatcher is for local
+    // development only and must never run inside Lambda: the worker below sends.
+    const trackingEnvironment: Record<string, string> = {
+      Storefront__BaseUrl: config.storefront.baseUrl,
+      Tracking__TokenEncryptionKeySecretArn: notifications.trackingKeySecret.secretArn,
+      Email__Dispatcher__RunInProcess: 'false',
+    };
+    const readTrackingKey = (): iam.PolicyStatement =>
+      new iam.PolicyStatement({
+        sid: 'ReadTrackingKey',
+        actions: ['secretsmanager:GetSecretValue'],
+        resources: [notifications.trackingKeySecret.secretArn],
+      });
 
     /* ------------------------------- API function ------------------------------- */
 
@@ -86,13 +125,8 @@ export class ApiStack extends Stack {
       securityGroup: props.lambdaSecurityGroup,
       environment: {
         ASPNETCORE_ENVIRONMENT: config.api.aspnetEnvironment,
-        Database__Host: database.appEndpointAddress,
-        Database__Port: database.port,
-        Database__Name: db.databaseName,
-        Database__User: db.appUser,
-        Database__UseIamAuth: 'true',
-        Database__Region: this.region,
-        Database__MaxPoolSize: String(config.api.dbMaxPoolSize),
+        ...databaseEnvironment,
+        ...trackingEnvironment,
         // Key names match the backend options (Auth:Cognito:*).
         Auth__Cognito__Region: this.region,
         Auth__Cognito__UserPoolId: props.userPoolId,
@@ -112,6 +146,8 @@ export class ApiStack extends Stack {
       policyStatements: [
         // Database: IAM authentication as the application user only.
         database.appConnectStatement(db.appUser),
+        // Tracking codes are encrypted into outbox rows (and decrypted for an admin retry) with this key.
+        readTrackingKey(),
         // Media: the pre-signed POST is signed with this role, so the browser upload is authorised by
         // s3:PutObject on uploads/*. Attaching reads the manifest under media/; deleting an image (or
         // archiving/replacing a category image) deletes its renditions under media/.
@@ -140,6 +176,22 @@ export class ApiStack extends Stack {
     this.apiAlias = new lambda.Alias(this, 'ApiLiveAlias', {
       aliasName: LIVE_ALIAS,
       version: this.apiFunction.function.currentVersion,
+    });
+
+    /* ------------------------------- Outbox worker ------------------------------- */
+
+    this.outboxWorker = this.createOutboxWorker(props, databaseEnvironment, trackingEnvironment, readTrackingKey());
+
+    // Every minute; the event content is ignored. Deployed even when e-mail is disabled: the worker also purges the
+    // expired rate-limit windows, and Pending rows go out as soon as e-mail is switched on.
+    this.outboxWorkerSchedule = new events.Rule(this, 'OutboxWorkerSchedule', {
+      ruleName: `${prefix}-outbox-worker`,
+      description: `Zladovce ${config.envName}: run the e-mail outbox worker every minute`,
+      schedule: events.Schedule.rate(Duration.minutes(1)),
+      targets: [
+        // No retries: the next scheduled run picks up whatever this one left.
+        new eventTargets.LambdaFunction(this.outboxWorker.function, { retryAttempts: 0, maxEventAge: Duration.minutes(1) }),
+      ],
     });
 
     /* --------------------------------- HTTP API --------------------------------- */
@@ -182,7 +234,12 @@ export class ApiStack extends Stack {
       methods: [apigwv2.HttpMethod.ANY],
       integration,
     });
-    this.unauthenticatedRoutes = [...preflightRoutes, ...publicRoutes];
+    // Explicit routes for the endpoints that get stricter throttling below. Same integration, no authorizer; the
+    // application does its own per-IP rate limiting on both. (OPTIONS on these paths still reaches ANY /{proxy+}.)
+    const throttledRoutes = [TRACKING_LOOKUP_ROUTE_PATH, CREATE_ORDER_ROUTE_PATH].flatMap((path) =>
+      this.httpApi.addRoutes({ path, methods: [apigwv2.HttpMethod.POST], integration }),
+    );
+    this.unauthenticatedRoutes = [...preflightRoutes, ...publicRoutes, ...throttledRoutes];
 
     const accessLogGroup = new logs.LogGroup(this, 'HttpApiAccessLogs', {
       logGroupName: `/aws/apigateway/${prefix}-api-access`,
@@ -231,15 +288,104 @@ export class ApiStack extends Stack {
       ...(domainName ? { domainMapping: { domainName } } : {}),
     });
 
+    // Per-route throttling (the L2 HttpStage only exposes the default route settings). `RouteSettings` is a raw JSON
+    // map in CloudFormation, so the property names are written in CloudFormation (PascalCase) form.
+    const routeThrottle = (throttle: ThrottleConfig) => ({
+      ThrottlingRateLimit: throttle.rateLimit,
+      ThrottlingBurstLimit: throttle.burstLimit,
+    });
+    const cfnStage = this.stage.node.defaultChild as apigwv2.CfnStage;
+    cfnStage.routeSettings = {
+      [TRACKING_LOOKUP_ROUTE_KEY]: routeThrottle(config.api.routeThrottling.trackingLookup),
+      [CREATE_ORDER_ROUTE_KEY]: routeThrottle(config.api.routeThrottling.createOrder),
+    };
+    // Route settings refer to the routes by key; the routes must exist first.
+    for (const route of throttledRoutes) this.stage.node.addDependency(route);
+
     this.apiUrl = customDomain ? `https://${customDomain.domainName}` : this.httpApi.apiEndpoint;
 
     new CfnOutput(this, 'ApiUrl', { value: this.apiUrl, description: 'Base URL of the HTTP API' });
     new CfnOutput(this, 'ApiFunctionName', { value: this.apiFunction.function.functionName });
+    new CfnOutput(this, 'OutboxWorkerFunctionName', {
+      value: this.outboxWorker.function.functionName,
+      description: 'E-mail outbox worker (EventBridge, every minute)',
+    });
     if (domainName) {
       new CfnOutput(this, 'ApiDomainTarget', {
         value: domainName.regionalDomainName,
         description: 'Create a CNAME/ALIAS DNS record from the API domain to this target',
       });
     }
+  }
+
+  /** The outbox worker: same package as the migration runner, in the VPC, the app database role. */
+  private createOutboxWorker(
+    props: ApiStackProps,
+    databaseEnvironment: Record<string, string>,
+    trackingEnvironment: Record<string, string>,
+    readTrackingKey: iam.PolicyStatement,
+  ): DotnetFunction {
+    const { config, database, notifications } = props;
+    const email = config.email;
+    const worker = config.outboxWorker;
+
+    const optional = (key: string, value: string | number | undefined): Record<string, string> =>
+      value === undefined ? {} : { [key]: String(value) };
+    const environment: Record<string, string> = {
+      ASPNETCORE_ENVIRONMENT: config.api.aspnetEnvironment,
+      DOTNET_ENVIRONMENT: config.api.aspnetEnvironment,
+      ...databaseEnvironment,
+      ...trackingEnvironment,
+      Email__Enabled: email.enabled ? 'true' : 'false',
+      Email__Provider: 'Ses',
+      Email__Ses__Region: this.region,
+      ...optional('Email__FromAddress', email.fromAddress),
+      ...optional('Email__FromName', email.fromName),
+      ...optional('Email__ReplyToAddress', email.replyToAddress),
+      ...optional('Email__LogoUrl', email.logoUrl),
+      ...optional('Email__Ses__ConfigurationSetName', notifications.configurationSetName),
+      ...optional('Email__Dispatcher__BatchSize', worker.batchSize),
+    };
+
+    const statements: iam.PolicyStatement[] = [database.appConnectStatement(config.database.appUser), readTrackingKey];
+    if (email.enabled) {
+      // validateConfig guarantees an identity (and therefore a configuration set) and a sender address.
+      // SES v2 SendEmail is authorised against the sending identity and the configuration set (and, in the sandbox,
+      // the verified recipient identities). The condition pins the sender to this environment's address, which
+      // matters because staging and prod share the domain identity.
+      const recipientArns = email.sandboxRecipients.map((address) =>
+        this.formatArn({ service: 'ses', resource: 'identity', resourceName: address, arnFormat: ArnFormat.SLASH_RESOURCE_NAME }),
+      );
+      statements.push(
+        new iam.PolicyStatement({
+          sid: 'SendEmailAsEnvironmentSender',
+          actions: ['ses:SendEmail'],
+          resources: [notifications.emailIdentityArn!, notifications.configurationSetArn!, ...recipientArns],
+          conditions: { StringEquals: { 'ses:FromAddress': email.fromAddress! } },
+        }),
+      );
+    }
+
+    return new DotnetFunction(this, 'OutboxWorker', {
+      functionName: `${resourcePrefix(config)}-outbox-worker`,
+      description: `Zladovce ${config.envName} e-mail outbox worker (EventBridge schedule, every minute)`,
+      handler: worker.handler,
+      assetPath: config.api.lambdaAssetPath,
+      requireArtifacts: props.requireArtifacts,
+      memoryMb: worker.memoryMb,
+      timeout: Duration.seconds(worker.timeoutSeconds),
+      // One run at a time is enough (and keeps database connections low); parallel runs would be safe anyway (rows are
+      // claimed with FOR UPDATE SKIP LOCKED). Skipped when reservations are disabled for the account.
+      reservedConcurrency: config.api.reservedConcurrency === undefined ? undefined : 1,
+      logRetentionDays: config.api.logRetentionDays,
+      retainLogs: config.isProduction,
+      vpc: props.vpc,
+      securityGroup: props.lambdaSecurityGroup,
+      environment,
+      policyStatements: statements,
+      // Scheduled (asynchronous) invocations: a failed or throttled run is not retried; the next minute's run is.
+      retryAttempts: 0,
+      maxEventAge: Duration.minutes(1),
+    });
   }
 }
