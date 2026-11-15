@@ -241,13 +241,13 @@ public static class OrderEmailRenderer
         w.KeyValues(rows);
     }
 
-    private static bool IsHttpUrl(string? value) =>
+    internal static bool IsHttpUrl(string? value) =>
         Uri.TryCreate(value, UriKind.Absolute, out var uri) && (uri.Scheme == Uri.UriSchemeHttps || uri.Scheme == Uri.UriSchemeHttp);
 
     private static string E(string value) => WebUtility.HtmlEncode(value);
 
     /// <summary>Writes HTML and plain text side by side.</summary>
-    private sealed class Writer
+    internal sealed class Writer
     {
         private readonly StringBuilder _html = new();
         private readonly StringBuilder _text = new();
@@ -353,7 +353,7 @@ public static class OrderEmailRenderer
 
             if (link is not null)
             {
-                _html.Append(Button("Pratite porudžbinu", link));
+                _html.Append(ButtonHtml("Pratite porudžbinu", link));
                 _text.AppendLine("Pratite porudžbinu: " + link);
             }
 
@@ -367,7 +367,15 @@ public static class OrderEmailRenderer
             _text.AppendLine($"{label}: {url}").AppendLine();
         }
 
-        private static string Button(string label, string url) =>
+        public void Button(string label, string url, string? intro = null)
+        {
+            _html.Append("<table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" style=\"margin:18px 0 18px 0;\"><tr><td align=\"center\">");
+            _html.Append(ButtonHtml(label, url));
+            _html.Append("</td></tr></table>");
+            _text.AppendLine($"{label}: {url}").AppendLine();
+        }
+
+        private static string ButtonHtml(string label, string url) =>
             "<table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" align=\"center\"><tr>" +
             $"<td align=\"center\" bgcolor=\"{Olive}\" style=\"border-radius:4px;\">" +
             $"<a href=\"{E(url)}\" style=\"display:inline-block;padding:12px 26px;font-family:{Sans};font-size:15px;line-height:1.2;color:#FFFFFF;text-decoration:none;border-radius:4px;\"><strong>{E(label)}</strong></a>" +

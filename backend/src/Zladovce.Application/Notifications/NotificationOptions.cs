@@ -14,6 +14,12 @@ public sealed class StorefrontOptions
     /// <summary>Link with the code in the URL fragment, so it never reaches server or CDN logs.</summary>
     public static string TrackingLink(string trackingPageUrl, string groupedCode) => $"{trackingPageUrl}#kod={groupedCode}";
 
+    /// <summary>Newsletter confirmation page: <c>{BaseUrl}/newsletter/potvrda#token={token}</c> (token in the fragment, never logged).</summary>
+    public string NewsletterConfirmLink(string token) => $"{(BaseUrl ?? string.Empty).TrimEnd('/')}/newsletter/potvrda#token={token}";
+
+    /// <summary>One-click unsubscribe page: <c>{BaseUrl}/newsletter/odjava#token={token}</c>.</summary>
+    public string NewsletterUnsubscribeLink(string token) => $"{(BaseUrl ?? string.Empty).TrimEnd('/')}/newsletter/odjava#token={token}";
+
     public bool IsConfigured =>
         Uri.TryCreate(BaseUrl, UriKind.Absolute, out var uri) && (uri.Scheme == Uri.UriSchemeHttps || uri.Scheme == Uri.UriSchemeHttp)
         && string.IsNullOrEmpty(uri.Query) && string.IsNullOrEmpty(uri.Fragment);

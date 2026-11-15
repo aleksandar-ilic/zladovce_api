@@ -27,6 +27,13 @@ transactional email outbox with its dispatcher (outbox worker Lambda, or a backg
 senders, the six Serbian order emails, admin email visibility / retry / resend confirmation / revoke tracking codes, and
 Mailpit for local development. See "Tracking and emails (Phase 6)".
 
+Phase 7 (Analytics and CMS, backend part) adds migration `AnalyticsAndContent` (`blog_categories`, `blog_posts`, `cms_pages`, `faq_items`,
+`testimonials`, `newsletter_subscribers`, `contact_messages`, `expenses`, `site_rebuild_requests`, logo size columns on
+`store_settings`), the dashboard (P1.8 metrics, series, top products, sales by category, status distribution), expenses, sales and
+inventory reports with CSV export, the blog, CMS pages, FAQ, testimonials, newsletter double opt-in, the contact form, the store logo,
+administrator accounts, the audit-log reader, blog and page routes in `GET /seo/routes` and the debounced storefront rebuild webhook.
+See "Analytics and content (Phase 7)".
+
 ## Layout
 
 ```
@@ -50,7 +57,7 @@ backend/
 ```
 
 Dependency rule: `Domain` ← `Application` ← `Infrastructure` ← `Api` / `Lambda`. Each project is organised by
-module folder (`Identity`, `StoreSettings`, `Audit`, `Categories`, `Catalog`, `Inventory`, `Media`, `Cart`, `Seo`, `Orders`, `Shipping`, `Customers`, `Tracking`, `Notifications`, `Common`).
+module folder (`Identity`, `StoreSettings`, `Audit`, `Categories`, `Catalog`, `Inventory`, `Media`, `Cart`, `Seo`, `Orders`, `Shipping`, `Customers`, `Tracking`, `Notifications`, `Analytics`, `Content`, `Marketing`, `Finance`, `Site`, `Common`).
 
 ## Prerequisites
 
@@ -275,7 +282,7 @@ CORS: the storefront origins (`http://localhost:4200` and `http://localhost:4210
 
 Visibility is the public catalog's (`CatalogVisibility`): active, not archived categories (also empty ones, whose
 page exists) and visible products. `updatedAt` is the category's/product's `updated_at` (product edits, variant and
-image changes touch it; stock changes do not). Blog posts and blog categories are added in Phase 7 as new members of
+image changes touch it; stock changes do not). Phase 7 added `blogPosts`, `blogCategories` and `pages` as new members of
 the same response (`{ slug, updatedAt }`); there are no placeholder entries.
 
 ## Endpoints (Phase 5 – checkout and orders)
@@ -302,7 +309,7 @@ format, postal code `^[0-9]{5}$`, collected amount and date both set or both nul
 | PUT | `/api/v1/admin/orders/{id}/payment` | AdminAny | `collectedAmount` (null clears), `collectedAt` (null = now), `version`; Delivered only |
 | GET | `/api/v1/admin/couriers[?activeOnly=true]`, `/{id}` | AdminAny | Courier companies |
 | POST, PUT | `/api/v1/admin/couriers`, `/{id}` | OwnerOnly | Create, change, deactivate (`isActive: false`); never deleted, none seeded |
-| GET, PUT | `/api/v1/admin/settings` | OwnerOnly | Every store setting except the logo; `version` (xmin) |
+| GET, PUT | `/api/v1/admin/settings` | OwnerOnly | Every store setting; `version` (xmin); the logo through `logoKey` (Phase 7) |
 
 ### Checkout
 
@@ -480,19 +487,191 @@ isResent }` – never a body or the payload. The order detail lists the order's 
 
 New error codes: `TRACKING_NOT_FOUND` (404), `EMAIL_NOT_RETRYABLE` (409).
 
+## Analytics and content (Phase 7)
+
+### Dashboard (AdminAny) — P1.8
+
+Query of every dashboard and report endpoint: `period` = `today`, `yesterday`, `last7`, `last30` (default), `thisMonth`, `lastMonth`,
+`thisYear`, `custom` (+ `from`, `to` as `yyyy-MM-dd`, inclusive, at most 3 years). Days are Europe/Belgrade calendar days
+(`SerbianTime.StartOfDay`), so a period is `[local midnight of from, local midnight after to)` — 23 hours on the last Sunday of March,
+25 on the last Sunday of October (unit- and integration-tested). Current periods end today (`thisMonth` = 1st … today).
+
+| Number | Definition (P1.8, authoritative) |
+|---|---|
+| `orderedValue`, `orderedCount` | Totals of orders **placed** in the period whose **current** status is not Rejected/Cancelled |
+| `deliveredValue`, `deliveredCount` | Totals of orders whose **Delivered transition** (`order_status_history`) is in the period |
+| `estimatedCollected` | = `deliveredValue` (cash on delivery is assumed collected at delivery) |
+| `actualCollected`, `collectedCount` | Sum of `collected_amount` whose `collected_at` is in the period (may differ from delivered) |
+| `expenses` | Expenses whose `expense_date` is a day of the period |
+| `estimatedProfit` | `deliveredValue − expenses` |
+| `averageOrderValue` | `orderedValue / orderedCount`, rounded to 2 decimals; `null` without orders |
+| `cancelledCount`, `rejectedCount` | Transitions to Cancelled / Rejected in the period |
+
+`previous` holds the same numbers for the comparable previous period (trend arrows): the same number of days immediately before
+(today, yesterday, last7, last30, custom); `thisMonth` → previous month from the 1st to the same day (clamped to its last day);
+`lastMonth` → the month before; `thisYear` → previous year from 1 January to the same day. `queues` are **current** counts, not
+period-bound: `awaitingConfirmation` (Received, "Čeka potvrdu"), `accepted` (Accepted, "Prihvaćene"), `preparing` (Preparing,
+"U pripremi"), `inPreparation` (Accepted + Preparing), `awaitingShipment` (Preparing — packed, waiting for the courier),
+`deliveryFailed`. Low stock stays `GET dashboard/low-stock`.
+
+| Method | Path | Response |
+|---|---|---|
+| GET | `/admin/dashboard/summary` | `{ period, current, previous, queues, currency }` |
+| GET | `/admin/dashboard/revenue-series` | `points[{ from, to, label, orderedValue, deliveredValue }]` |
+| GET | `/admin/dashboard/order-series` | `points[{ from, to, label, orderCount (without Rejected/Cancelled), placedCount }]` |
+| GET | `/admin/dashboard/top-products?limit=` | `byQuantity[]`, `byRevenue[]` of `{ productId, productName, quantity, revenue }` (1–50, default 5) |
+| GET | `/admin/dashboard/sales-by-category` | `items[{ categoryId, categoryName, quantity, revenue }]`, `totalRevenue` |
+| GET | `/admin/dashboard/status-distribution` | `items[{ status, label, count }]` (all eight), `total` |
+
+Buckets are days, or calendar months (cut to the period) for `thisYear` and ranges over 92 days; every bucket is present (zero-filled).
+`period` in every response: `{ period, current: { from, to }, previous: { from, to }, granularity: Day|Month, timeZone }`.
+Top products and categories use order-item snapshots of orders delivered in the period; revenue = line totals (no shipping). Product
+names are the snapshot of the latest sale. Sales by category groups by the product's **current** category; a product whose category
+is archived counts under **"Bez kategorije"** (`categoryId: null`). Archived products keep counting under their category while it exists.
+
+### Expenses (OwnerOnly)
+
+`GET /admin/expenses/categories` → `[{ value, label }]`: `Ambalaza` (Ambalaža), `Sirovine`, `Dostava`, `Marketing`, `Ostalo`. The list is
+`ExpenseCategories.All` in the domain; the column has no check constraint, so changing it needs no migration. `GET /admin/expenses`
+(`period` optional — omitted = all, `category`, paging) → `{ period, expenses (paged), total, totals[{ category, categoryLabel, amount,
+count }], currency }`; `GET/PUT/DELETE /admin/expenses/{id}`, `POST /admin/expenses` `{ expenseDate, category, description, amount > 0 }`
+(all required). Audited by the interceptor (`Expense.*`).
+
+### Reports (AdminAny) and CSV
+
+`GET /admin/reports/sales` (period) → `{ byVariant[{ variantId, productId, productName, variantName, sku, categoryName, quantity, revenue }],
+byCategory[], totalQuantity, totalRevenue, deliveredOrders, shippingRevenue }`; `format=csv&groupBy=variant|category`.
+`GET /admin/reports/inventory` → every variant that is not archived: `{ quantityOnHand, lowStockThreshold, status ok|low|out, statusLabel,
+regularPrice, stockValue = quantity × regular price, isActive }`, totals; `format=csv`.
+CSV (`CsvWriter`): UTF-8 **with BOM**, `;` separator, decimal comma, no thousands separator (what Serbian-locale Excel opens directly),
+CRLF, RFC 4180 quoting, and formula-injection protection (a text cell starting with `=`, `+`, `-`, `@`, tab or CR gets a leading `'`;
+numbers are written separately and never prefixed). Response `text/csv; charset=utf-8` with `Content-Disposition: attachment;
+filename=…`. The admin app must fetch it with the `Authorization` header and save the blob (a plain link has no token).
+
+### Blog
+
+Tables `blog_categories` (name, unique slug, sort order) and `blog_posts` (DATABASE.md; `category_id` nullable, cover width/height,
+`xmin` version, partial unique slug `WHERE deleted_at IS NULL`). Public = `status = Published AND published_at <= now() AND deleted_at IS
+NULL` (`BlogVisibility`, the only definition): drafts, scheduled posts before their time and archived posts are 404 and absent from
+lists, latest posts and `/seo/routes` (integration-tested).
+
+Admin (AdminAny): `GET/POST /admin/blog/categories`, `PUT/DELETE /admin/blog/categories/{id}` (409 `BLOG_CATEGORY_HAS_POSTS` while a
+draft or published post uses it; archived posts lose the link); `GET /admin/blog/posts` (`q`, `status` = `Draft|Scheduled|Published`,
+`categoryId`, paging), `POST` (creates a Draft), `GET/PUT /{id}` (`version`), `POST /{id}/publish` `{ version, publishedAt }` (null =
+now, future = scheduled), `POST /{id}/unpublish` `{ version }`, `DELETE /{id}` (archive: soft delete, cover files deleted),
+`POST /admin/blog/images` `{ uploadKey }` (purpose `blog`) → renditions for images inside the content. Publishing needs an excerpt and
+content (400 with `errors.excerpt` / `errors.contentHtml`). Public: `GET /blog/categories`, `GET /blog/posts?category=&page=&pageSize=`,
+`GET /blog/posts/{slug}`, `GET /blog/latest-posts?limit=` (1–12, default 3, homepage previews).
+
+Rich text (`RichHtmlSanitizer`, also used by CMS pages): the product allow-list (p, br, strong/b, em/i, u, s, ul/ol/li, h2–h4,
+blockquote, a[href,title], hr) plus `figure`, `figcaption` and `img[src, alt, width, height]`, where `src` must start with
+`{Media:BaseUrl}/media/blog/` or `{Media:BaseUrl}/media/pages/` (no `..`); any other image is removed. Scripts, styles, classes, event
+handlers, `javascript:`/`data:` URLs, frames and forms are removed. Inline images that are later removed from a post are not deleted
+from storage (known gap: unused files cost storage only).
+
+### CMS pages
+
+`cms_pages` keys `home`, `about`, `privacy`, `terms`, **`delivery`** (Dostava i plaćanje: a page the Serbian consumer-protection rules
+expect a web shop to have; `store_settings.delivery_info` stays the short plain-text fallback). The migration seeds every key with
+**null content** (nothing invented). Content is typed per key (OpenAPI schemas `HomePageContent`, `AboutPageContent`,
+`RichTextPageContent`):
+
+- `home`: `hero { title ≤120, subtitle ≤300, primaryCtaLabel ≤40, secondaryCtaLabel ≤40, image }`, `intro { title, text ≤3000 }`,
+  `story { title, text ≤5000, image }`, `whyUs { title, items[0–6]{ title ≤80 (required), text ≤400 } }`, `quality { title, text }` —
+  plain text; empty sections become null.
+- `about`: `bodyHtml` (sanitised, ≤50000), `images[0–6]`.
+- `privacy`, `terms`, `delivery`: `bodyHtml` (sanitised, ≤100000).
+
+Images are sent as `{ key, alt }`: the current `image.key` keeps it, an upload key (purpose `page`) adds a new one; removed images'
+files are deleted after the save. A page whose content ends up empty is stored as null. Admin (AdminAny): `GET /admin/cms/pages`,
+`GET/PUT /admin/cms/pages/{home|about|privacy|terms|delivery}` with `version` (409 `CONCURRENT_EDIT`); validation errors use paths such
+as `content.hero.title`, `content.whyUs.items[0].title`. Public: `GET /content/pages/{key}` — 404 while empty.
+
+### FAQ and testimonials
+
+`faq_items` (question ≤300, plain-text answer ≤4000, `is_published`, `sort_order`): `GET/POST /admin/faq` (new items at the end),
+`PUT /admin/faq/order` `{ ids }` (every item once), `PUT/DELETE /admin/faq/{id}`; public `GET /content/faq` (published, in order).
+`testimonials` (author ≤100, optional place, text ≤1000, published, sort order) — a table beyond DATABASE.md because §5/A13 require the
+homepage section only for real testimonials entered by the owner; nothing is seeded, so `GET /content/testimonials` is empty and the
+storefront hides the section. Admin CRUD `/admin/testimonials`.
+
+### Newsletter (A10: collection only, no campaigns)
+
+`POST /newsletter/subscriptions` `{ email, consent: true, website }` → always `202 { message }` with the same text: new and
+unsubscribed addresses get a `NewsletterConfirm` email; a pending address gets it again at most every 30 minutes; a confirmed address
+gets nothing (no enumeration). `website` is a honeypot: when filled, nothing happens (same 202). Rate limit `NewsletterSignup` 3 per
+10 minutes per IP. The email links to `{Storefront:BaseUrl}/newsletter/potvrda#token=…` and `/newsletter/odjava#token=…` (fragment, never
+logged); the pages POST the token to `POST /newsletter/confirm` / `POST /newsletter/unsubscribe` `{ token }` → `200 { status, message }`;
+400 `NEWSLETTER_TOKEN_INVALID` for malformed, forged, expired (confirm: 7 days), superseded or unsubscribed-confirm tokens (rate limit
+`NewsletterToken` 20 per 10 minutes). Tokens are HMAC-SHA256 (key derived with HKDF from the tracking key, no new secret); nothing
+secret is stored in the outbox — the links are signed when the email is rendered. Unsubscribe tokens never expire. Admin (OwnerOnly):
+`GET /admin/newsletter/subscribers` (`status`, `q`, paging, counts) and `GET /admin/newsletter/subscribers/export` (CSV of confirmed).
+
+### Contact form
+
+`POST /contact` `{ name ≤100, email, message ≤5000, website }` → `202 { message }`; stores a `contact_messages` row and queues a
+`ContactMessage` email to the store contact email with **Reply-To = the sender**, in one transaction. Without a store contact email:
+`409 CONTACT_NOT_CONFIGURED` ("Poruku trenutno nije moguće poslati…") instead of dropping the message. Honeypot `website` → same 202,
+nothing stored. Rate limit `ContactForm` 3 per 10 minutes per IP. `contact_messages` (beyond DATABASE.md) keeps the message readable in
+the admin even if mail is delayed: `GET /admin/contact-messages?unreadOnly=` (with `unreadCount`), `POST …/{id}/read|unread`.
+
+### Store logo
+
+`PUT /admin/settings` has the required member `logoKey`: the current key keeps the logo, `null` removes it, an upload key
+(purpose `logo`) replaces it. Logos get the WebP renditions plus `{key}/email.png` (≤ 320 px; email clients do not all show WebP).
+Admin and public store responses have `logo { key, baseUrl, widths, width, height, emailPngUrl }` (and `logoKey`). Emails use
+`emailPngUrl` when `Media:BaseUrl` is https (CloudFront), else `Email:LogoUrl`, else the store name.
+
+### Administrators (OwnerOnly)
+
+`GET /admin/users`, `POST /admin/users` `{ email, fullName, role }` (`IIdentityProvisioning`: Cognito `AdminCreateUser` — Cognito emails the
+temporary password — plus `AdminAddUserToGroup`; Development without Cognito: only the row, subject `dev:{email}`), `PUT /admin/users/{id}`
+`{ role, isActive }` (groups follow; `AdminDisableUser` / `AdminEnableUser`). Rules: no change of one's own role or active state
+(409 `CANNOT_CHANGE_SELF`), the last active Owner can be neither demoted nor deactivated (409 `LAST_OWNER`; serialised with an advisory
+lock), duplicate email 409 `ADMIN_EMAIL_TAKEN`, Cognito failure 503 `IDENTITY_PROVIDER_ERROR` (nothing stored). Deactivation blocks
+the API at once; a role change applies with the user's next token (the role mirrors the token group, see Authentication). Audit:
+`AdminUser.Invited`, `.RoleChanged`, `.Deactivated`, `.Activated`.
+
+### Audit log (OwnerOnly)
+
+`GET /admin/audit-logs` (`adminUserId`, `entityType`, `entityId`, `action`, `from`/`to` Serbian dates, paging), newest first:
+`{ id, createdAt, action, entityType, entityId, adminUserId, adminName, adminEmail, ipAddress, summary, changes }`; `summary` is Serbian
+("Proizvod – izmena (name, isActive)", "Porudžbina – promena statusa: Received → Accepted"). `GET /admin/audit-logs/filters` lists the
+entity types (with labels) and actions present. The interceptor now also audits `BlogCategory`, `BlogPost`, `CmsPage`, `FaqItem`,
+`Testimonial`, `Expense`, `ContactMessage`; large columns (`contentHtml`, CMS `content`) are recorded as "(N znakova)", not copied.
+No secrets are ever audited.
+
+### SEO routes
+
+`GET /seo/routes` → `{ categories, products, blogPosts, blogCategories, pages }`: public posts (`updatedAt` = later of change and
+publication time), blog categories with at least one public post, and CMS page keys that have content (`{ key, updatedAt }`).
+
+### Storefront rebuild webhook (A14)
+
+`SiteRebuildInterceptor` marks `site_rebuild_requests` (single row) pending after any saved change of categories, products, variants,
+product images, store settings, blog categories/posts, CMS pages, FAQ or testimonials (inside the caller's transaction). The outbox
+worker (Lambda every minute; locally the in-process dispatcher) runs `SiteRebuildDispatcher`: it also notices scheduled posts that
+became public, and when a rebuild is pending and the last call is at least `Site:RebuildMinIntervalSeconds` (300) old it claims the row
+with one conditional update and sends an empty `POST` to `Site:RebuildWebhookUrl` (or the URL in the secret `Site:RebuildWebhookUrlSecretArn`).
+No URL → nothing is called. A failed call (non-2xx, timeout `Site:RebuildTimeoutSeconds`) keeps it pending; `last_result` keeps the HTTP
+status or exception type, never the URL. Tested with a local HTTP listener.
+
+New error codes: `BLOG_CATEGORY_HAS_POSTS`, `CONTACT_NOT_CONFIGURED`, `NEWSLETTER_TOKEN_INVALID`, `ADMIN_EMAIL_TAKEN` (`errors.email`),
+`LAST_OWNER`, `CANNOT_CHANGE_SELF` (409), `IDENTITY_PROVIDER_ERROR` (503). Email templates: `NewsletterConfirm`, `ContactMessage`.
+
 ## Images
 
-Flow (product and category images alike; `purpose` decides the folder):
+Flow (product, category, blog, page and logo images alike; `purpose` = `product|category|blog|page|logo` decides the folder):
 
 1. `POST /api/v1/admin/media/upload-url` `{ fileName, contentType, size, purpose }` → `{ uploadUrl, fields, key, expiresAt, maxSize }`.
-   The pre-signed POST accepts exactly this key under `uploads/{product|category}/`, exactly this `Content-Type`
+   The pre-signed POST accepts exactly this key under `uploads/{purpose}/`, exactly this `Content-Type`
    (JPEG, PNG or WebP) and 1 byte – 10 MB.
 2. The browser POSTs `multipart/form-data` to `uploadUrl`: every entry of `fields` (unchanged, in order), then the
    file as the last field named `file`. The storage answers `204`.
 3. Processing (`IImageProcessor`, Magick.NET): verifies the file signature and decodes it as that format only,
    limits the pixel count, applies the EXIF orientation, converts to sRGB, strips all metadata and writes WebP
    renditions at 400, 800 and 1600 px wide (never enlarged; an image narrower than 1600 also gets its own width) to
-   `media/{products|categories}/{imageId}/{width}.webp` plus a `manifest.json`, then deletes the upload. A file that is
+   `media/{products|categories|blog|pages|logos}/{imageId}/{width}.webp` (logos also `email.png`, at most 320 px) plus a `manifest.json`, then deletes the upload. A file that is
    not an acceptable image is deleted and remembered as rejected.
    - On AWS: the image processor Lambda, triggered by the S3 upload.
    - Locally (`Media:ProcessInline=true`, the Development default): inside the attach request.
@@ -517,7 +696,7 @@ ImageMagick licence, Apache-2.0 style). Free for commercial use; the package shi
 |---|---|---|
 | `Zladovce.Lambda::Zladovce.Lambda.MigrationRunner::HandleAsync` | `{}` or `{ "action": "migrate" }`: apply migrations as `Database__User` (migrator). `{ "action": "bootstrap" }`: create the roles (below) | Pipeline |
 | `Zladovce.Lambda::Zladovce.Lambda.ImageProcessorFunction::HandleAsync` | Process uploads into renditions. No database access | S3 `s3:ObjectCreated:*` on the media bucket, prefix `uploads/` |
-| `Zladovce.Lambda::Zladovce.Lambda.OutboxWorkerFunction::HandleAsync` | Send due outbox emails, purge expired rate-limit windows. Returns `{ claimed, sent, retrying, dead, expired, purgedRateLimitBuckets }` | EventBridge schedule every minute (input ignored) |
+| `Zladovce.Lambda::Zladovce.Lambda.OutboxWorkerFunction::HandleAsync` | Send due outbox emails, purge expired rate-limit windows, call the storefront rebuild webhook when due. Returns `{ claimed, sent, retrying, dead, expired, purgedRateLimitBuckets, siteRebuild }` | EventBridge schedule every minute (input ignored) |
 
 ### Database roles (bootstrap)
 
@@ -631,7 +810,11 @@ variables (`Section__Key`).
 | `Email:Enabled` | `false` = outbox rows are written but nothing is sent (default `true`) |
 | `Email:Provider` | `Ses` (default) or `Smtp` (Development: Mailpit) |
 | `Email:FromAddress`, `FromName`, `ReplyToAddress` | Sender (verified SES identity), display name (default: store name), Reply-To (default: store contact email) |
-| `Email:LogoUrl` | Optional https URL of the logo in the email header (the only image) |
+| `Email:LogoUrl` | Optional https URL of the logo in the email header (the only image); used when the store has no logo or `Media:BaseUrl` is not https |
+| `RateLimiting:Policies:ContactForm`, `NewsletterSignup`, `NewsletterToken` | Contact form and newsletter sign-up: 3 per 600 s per IP; newsletter confirm/unsubscribe: 20 per 600 s |
+| `Site:RebuildWebhookUrl` | Storefront build hook (secret; https, or http on loopback). Empty = no rebuild calls |
+| `Site:RebuildWebhookUrlSecretArn` | Secrets Manager secret with the build hook URL (string or `{ "url": "…" }`); takes precedence. AWS |
+| `Site:RebuildMinIntervalSeconds`, `RebuildTimeoutSeconds` | At most one rebuild call per 300 s (default); call timeout 10 s |
 | `Email:Ses:ConfigurationSetName`, `Region` | SES configuration set; SES region (default: the Lambda's region) |
 | `Email:Smtp:Host`, `Port`, `Security` (`None`/`StartTls`/`SslOnConnect`), `UserName`, `Password` | SMTP (Development: `localhost:1025`, `None`) |
 | `Email:Dispatcher:RunInProcess`, `IntervalSeconds` | Background dispatcher in the API (Development: `true`, 5 s). Must be false on Lambda |

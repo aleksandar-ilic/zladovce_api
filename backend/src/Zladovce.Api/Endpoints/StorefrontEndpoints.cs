@@ -32,7 +32,7 @@ public static class StorefrontEndpoints
             .WithTags("SEO")
             .AllowAnonymous()
             .WithName("GetSeoRoutes")
-            .WithSummary("Slugs and last-modified times of the visible categories and products, for prerendering and the sitemap.")
-            .WithDescription("Same visibility as the public catalog. Blog posts are added in a later phase as a new member.");
+            .WithSummary("Slugs and last-modified times of everything the storefront prerenders: categories, products, blog posts, blog categories, CMS pages with content.")
+            .WithDescription("Same visibility as the public catalog and the public blog (drafts, scheduled and archived posts are never listed). `pages` lists CMS keys that have content.");
     }
 }

@@ -6,12 +6,14 @@ using Zladovce.Domain.StoreSettings;
 namespace Zladovce.Application.StoreSettings;
 
 /// <summary>Response of <c>GET/PUT /api/v1/admin/settings</c>: every column of the store settings.</summary>
-/// <param name="LogoKey">Read-only here; the logo upload is not part of this phase.</param>
+/// <param name="LogoKey">Storage key of the logo (<c>media/logos/{id}</c>) or null; send it back as <c>logoKey</c> to keep the logo.</param>
+/// <param name="Logo">The logo renditions (null without a logo).</param>
 /// <param name="UpdatedByAdminName">Who saved last; null before the first save.</param>
 /// <param name="Version">Send back with the update; a stale value gives 409 <c>CONCURRENT_EDIT</c>.</param>
 public sealed record AdminStoreSettingsResponse(
     string StoreName,
     string? LogoKey,
+    StoreLogo? Logo,
     string? ContactEmail,
     string? Phone,
     string? BusinessAddress,
@@ -48,6 +50,12 @@ public sealed record UpdateStoreSettingsRequest
 
     /// <summary>1–100 characters.</summary>
     public required string? StoreName { get; init; }
+
+    /// <summary>
+    /// The current <c>logoKey</c> keeps the logo; null removes it; an upload key from <c>POST /admin/media/upload-url</c> (purpose
+    /// <c>logo</c>) replaces it. Logos get WebP renditions and a PNG of at most 320 px for emails.
+    /// </summary>
+    public required string? LogoKey { get; init; }
 
     public required string? ContactEmail { get; init; }
 
@@ -133,6 +141,7 @@ public sealed class UpdateStoreSettingsRequestValidator : AbstractValidator<Upda
         RuleFor(r => r.ContactEmail)
             .Must(v => string.IsNullOrWhiteSpace(v) || (v.Trim().Length <= CheckoutRules.MaxEmailLength && CheckoutRules.EmailPattern().IsMatch(v.Trim())))
             .WithMessage("Unesite ispravnu adresu e-pošte.");
+        RuleFor(r => r.LogoKey).MaximumLength(200);
         RuleFor(r => r.Phone).MaximumLength(50).WithMessage("Telefon može imati najviše 50 znakova.");
         RuleFor(r => r.BusinessAddress).MaximumLength(300).WithMessage("Adresa može imati najviše 300 znakova.");
         RuleFor(r => r.ShippingEnabled).NotNull();

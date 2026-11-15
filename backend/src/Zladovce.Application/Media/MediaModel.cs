@@ -7,6 +7,15 @@ public enum MediaPurpose
 {
     Product,
     Category,
+
+    /// <summary>Blog cover and images inside blog posts (<c>media/blog/{id}</c>).</summary>
+    Blog,
+
+    /// <summary>Images of CMS pages such as O nama (<c>media/pages/{id}</c>).</summary>
+    Page,
+
+    /// <summary>Store logo (<c>media/logos/{id}</c>); also gets a small PNG for emails (<c>email.png</c>).</summary>
+    Logo,
 }
 
 /// <summary>Configuration section <c>Media</c>.</summary>
@@ -109,6 +118,9 @@ public static class MediaKeys
     {
         MediaPurpose.Product => "product",
         MediaPurpose.Category => "category",
+        MediaPurpose.Blog => "blog",
+        MediaPurpose.Page => "page",
+        MediaPurpose.Logo => "logo",
         _ => throw new ArgumentOutOfRangeException(nameof(purpose)),
     };
 
@@ -121,6 +133,15 @@ public static class MediaKeys
                 return true;
             case "category":
                 purpose = MediaPurpose.Category;
+                return true;
+            case "blog":
+                purpose = MediaPurpose.Blog;
+                return true;
+            case "page":
+                purpose = MediaPurpose.Page;
+                return true;
+            case "logo":
+                purpose = MediaPurpose.Logo;
                 return true;
             default:
                 purpose = default;
@@ -167,10 +188,18 @@ public static class MediaKeys
     {
         MediaPurpose.Product => $"{MediaPrefix}products/{imageId:D}",
         MediaPurpose.Category => $"{MediaPrefix}categories/{imageId:D}",
+        MediaPurpose.Blog => $"{MediaPrefix}blog/{imageId:D}",
+        MediaPurpose.Page => $"{MediaPrefix}pages/{imageId:D}",
+        MediaPurpose.Logo => $"{MediaPrefix}logos/{imageId:D}",
         _ => throw new ArgumentOutOfRangeException(nameof(purpose)),
     };
 
     public static string RenditionKey(string storageKey, int width) => $"{storageKey}/{width}.webp";
+
+    /// <summary>Logos only: a PNG at most <see cref="EmailLogoMaxWidth"/> wide, because email clients do not all show WebP.</summary>
+    public static string EmailPngKey(string storageKey) => $"{storageKey}/email.png";
+
+    public const int EmailLogoMaxWidth = 320;
 
     /// <summary>Written last by the processor; its presence means the renditions are complete.</summary>
     public static string ManifestKey(string storageKey) => $"{storageKey}/manifest.json";

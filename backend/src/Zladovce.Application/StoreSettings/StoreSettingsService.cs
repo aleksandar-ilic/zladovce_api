@@ -1,4 +1,6 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
+using Zladovce.Application.Media;
 using Zladovce.Application.Common;
 using Zladovce.Application.Common.Errors;
 using Zladovce.Domain.StoreSettings;
@@ -15,10 +17,15 @@ public interface IStoreSettingsService
     Task<AdminStoreSettingsResponse> UpdateAsync(UpdateStoreSettingsRequest request, CancellationToken cancellationToken);
 }
 
-public sealed class StoreSettingsService(IZladovceDbContext db, IRequestContext requestContext, TimeProvider timeProvider) : IStoreSettingsService
+public sealed class StoreSettingsService(
+    IZladovceDbContext db,
+    IRequestContext requestContext,
+    IImageProcessor images,
+    IOptions<MediaOptions> mediaOptions,
+    TimeProvider timeProvider) : IStoreSettingsService
 {
     public async Task<PublicStoreResponse> GetPublicAsync(CancellationToken cancellationToken) =>
-        PublicStoreResponse.From(await LoadAsync(tracked: false, cancellationToken));
+        PublicStoreResponse.From(await LoadAsync(tracked: false, cancellationToken), mediaOptions.Value);
 
     public async Task<AdminStoreSettingsResponse> GetAdminAsync(CancellationToken cancellationToken) =>
         await ToAdminAsync(await LoadAsync(tracked: false, cancellationToken), cancellationToken);
@@ -32,12 +39,42 @@ public sealed class StoreSettingsService(IZladovceDbContext db, IRequestContext 
             throw new ConflictException(ErrorTexts.ConcurrentEditDetail, ErrorCodes.ConcurrentEdit, ErrorTexts.ConcurrentEditTitle);
         }
 
-        settings.Update(request.ToValues(), admin.Id, timeProvider.GetUtcNow());
+        var now = timeProvider.GetUtcNow();
+        settings.Update(request.ToValues(), admin.Id, now);
+        var replaced = await ApplyLogoAsync(settings, request.LogoKey, admin.Id, now, cancellationToken);
         db.Entry(settings).Property(s => s.Version).OriginalValue = request.Version.Value;
         await db.SaveChangesAsync(cancellationToken);
+        if (replaced is { } old)
+        {
+            await images.DeleteRenditionsAsync(old.Key, old.Width, cancellationToken);
+        }
 
         db.ChangeTracker.Clear();
         return await GetAdminAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// <c>logoKey</c>: the current key keeps the logo, null removes it, an upload key (purpose <c>logo</c>) replaces it. Returns the
+    /// logo that was replaced or removed, whose files are deleted after the save.
+    /// </summary>
+    private async Task<(string Key, int Width)?> ApplyLogoAsync(
+        StoreSettingsRecord settings, string? logoKey, Guid adminId, DateTimeOffset now, CancellationToken cancellationToken)
+    {
+        (string Key, int Width)? previous = settings is { LogoKey: { } key, LogoWidth: { } width } ? (key, width) : null;
+        if (string.IsNullOrWhiteSpace(logoKey))
+        {
+            settings.RemoveLogo(adminId, now);
+            return previous;
+        }
+
+        if (logoKey == settings.LogoKey)
+        {
+            return null;
+        }
+
+        var image = await images.GetProcessedAsync(logoKey.Trim(), MediaPurpose.Logo, "logoKey", cancellationToken);
+        settings.SetLogo(image.StorageKey, image.Width, image.Height, adminId, now);
+        return previous;
     }
 
     private async Task<StoreSettingsRecord> LoadAsync(bool tracked, CancellationToken cancellationToken)
@@ -58,6 +95,7 @@ public sealed class StoreSettingsService(IZladovceDbContext db, IRequestContext 
         return new AdminStoreSettingsResponse(
             s.StoreName,
             s.LogoKey,
+            StoreLogo.From(mediaOptions.Value, s),
             s.ContactEmail,
             s.Phone,
             s.BusinessAddress,

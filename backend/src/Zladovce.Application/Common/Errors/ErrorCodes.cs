@@ -53,6 +53,15 @@ public static class ErrorCodes
     // Tracking and emails
     public const string TrackingNotFound = "TRACKING_NOT_FOUND";
     public const string EmailNotRetryable = "EMAIL_NOT_RETRYABLE";
+
+    // Phase 7: content, marketing, administrators
+    public const string BlogCategoryHasPosts = "BLOG_CATEGORY_HAS_POSTS";
+    public const string ContactNotConfigured = "CONTACT_NOT_CONFIGURED";
+    public const string NewsletterTokenInvalid = "NEWSLETTER_TOKEN_INVALID";
+    public const string AdminEmailTaken = "ADMIN_EMAIL_TAKEN";
+    public const string LastOwner = "LAST_OWNER";
+    public const string CannotChangeSelf = "CANNOT_CHANGE_SELF";
+    public const string IdentityProviderError = "IDENTITY_PROVIDER_ERROR";
 }
 
 /// <summary>Default Serbian (Latin) texts for the generic error codes.</summary>
@@ -173,4 +182,25 @@ public static class ErrorTexts
 
     public const string EmailNotRetryableTitle = "Poruka se ne može ponovo poslati";
     public const string EmailNotRetryableDetail = "Ponovo se šalju samo poruke čije je slanje konačno neuspelo.";
+
+    public const string BlogCategoryHasPostsTitle = "Kategorija ima objave";
+    public const string BlogCategoryHasPostsDetail = "Kategoriju nije moguće obrisati dok je koriste objave koje nisu arhivirane.";
+
+    public const string ContactNotConfiguredTitle = "Kontakt forma trenutno ne radi";
+    public const string ContactNotConfiguredDetail = "Poruku trenutno nije moguće poslati. Pozovite nas telefonom ili pokušajte kasnije.";
+
+    public const string NewsletterTokenInvalidTitle = "Link nije ispravan";
+    public const string NewsletterTokenInvalidDetail = "Link nije ispravan ili je istekao. Prijavite se ponovo na novosti.";
+
+    public const string AdminEmailTakenTitle = "Adresa je zauzeta";
+    public const string AdminEmailTakenDetail = "Administrator sa ovom adresom e-pošte već postoji.";
+
+    public const string LastOwnerTitle = "Poslednji vlasnik";
+    public const string LastOwnerDetail = "Prodavnica mora imati bar jednog aktivnog vlasnika. Prvo dodelite ulogu vlasnika nekom drugom.";
+
+    public const string CannotChangeSelfTitle = "Nije moguće menjati sopstveni nalog";
+    public const string CannotChangeSelfDetail = "Ne možete promeniti sopstvenu ulogu niti deaktivirati sopstveni nalog.";
+
+    public const string IdentityProviderErrorTitle = "Greška servisa za prijavu";
+    public const string IdentityProviderErrorDetail = "Izmenu nije moguće sprovesti u servisu za prijavu. Pokušajte ponovo kasnije.";
 }

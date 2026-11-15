@@ -46,3 +46,13 @@ public sealed class OrderLocks(ZladovceDbContext db) : IOrderLocks
     public async Task LockAsync(Guid orderId, CancellationToken cancellationToken) =>
         await db.Database.ExecuteSqlAsync($"SELECT id FROM orders WHERE id = {orderId} FOR UPDATE", cancellationToken);
 }
+
+/// <summary>One advisory lock (fixed key) for every change of administrator roles or activity, released at commit.</summary>
+public sealed class AdminUserLocks(ZladovceDbContext db) : Application.Identity.IAdminUserLocks
+{
+    /// <summary>Arbitrary constant key of the lock.</summary>
+    public const long LockKey = 7_200_001;
+
+    public async Task LockAdministratorsAsync(CancellationToken cancellationToken) =>
+        await db.Database.ExecuteSqlAsync($"SELECT pg_advisory_xact_lock({LockKey})", cancellationToken);
+}

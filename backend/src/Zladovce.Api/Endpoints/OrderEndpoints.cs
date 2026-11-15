@@ -178,8 +178,10 @@ public static class AdminShippingEndpoints
             .WithName("UpdateAdminSettings")
             .WithSummary("Replace the store settings (Owner). Every member must be sent; `version` as last read.")
             .WithDescription(
-                "The logo is not changed here. Shipping changes apply to the next quote and order at once. " +
-                "Errors: 400 VALIDATION_FAILED; 403 FORBIDDEN (Staff); 409 CONCURRENT_EDIT.")
+                "`logoKey`: the current key keeps the logo, null removes it, an upload key (purpose `logo`) replaces it (renditions " +
+                "and an email PNG are made; the old files are deleted after the save). Shipping changes apply to the next quote and " +
+                "order at once. Errors: 400 VALIDATION_FAILED, INVALID_IMAGE, UPLOAD_NOT_FOUND; 403 FORBIDDEN (Staff); " +
+                "409 CONCURRENT_EDIT, IMAGE_NOT_READY.")
             .Problems(StatusCodes.Status400BadRequest, StatusCodes.Status409Conflict);
     }
 }

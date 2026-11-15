@@ -36,6 +36,8 @@ public sealed class EmailDispatcher(
     IRateLimiter rateLimiter,
     IOptions<EmailOptions> options,
     IOptions<StorefrontOptions> storefront,
+    IOptions<Application.Media.MediaOptions> mediaOptions,
+    INewsletterTokens newsletterTokens,
     TimeProvider timeProvider,
     ILogger<EmailDispatcher> logger) : IEmailDispatcher
 {
@@ -188,15 +190,45 @@ public sealed class EmailDispatcher(
             throw new InvalidOperationException("Email:FromAddress is not configured.");
         }
 
-        var payload = OrderEmailPayload.FromJson(message.Payload);
-        var code = message.EncryptedToken is null ? null : await protector.UnprotectAsync(message.EncryptedToken, message.Id, cancellationToken);
         var (branding, store) = await BrandingAsync(cancellationToken);
-        var rendered = OrderEmailRenderer.Render(message.Template, payload, code, branding);
-
-        var fromName = string.IsNullOrWhiteSpace(settings.FromName) ? store.StoreName : settings.FromName.Trim();
         var replyTo = !string.IsNullOrWhiteSpace(settings.ReplyToAddress) ? settings.ReplyToAddress.Trim()
             : string.IsNullOrWhiteSpace(store.ContactEmail) ? null : store.ContactEmail;
 
+        RenderedEmail rendered;
+        switch (message.Template)
+        {
+            case EmailTemplate.NewsletterConfirm:
+            {
+                var payload = NewsletterConfirmPayload.FromJson(message.Payload);
+                var confirm = await newsletterTokens.CreateAsync(
+                    new NewsletterToken(NewsletterTokenPurpose.Confirm, payload.SubscriberId, payload.ConfirmationSentAt), cancellationToken);
+                var unsubscribe = await newsletterTokens.CreateAsync(
+                    new NewsletterToken(NewsletterTokenPurpose.Unsubscribe, payload.SubscriberId, null), cancellationToken);
+                rendered = MarketingEmailRenderer.RenderNewsletterConfirm(
+                    storefront.Value.NewsletterConfirmLink(confirm), storefront.Value.NewsletterUnsubscribeLink(unsubscribe), branding);
+                break;
+            }
+
+            case EmailTemplate.ContactMessage:
+            {
+                var payload = ContactMessagePayload.FromJson(message.Payload);
+                rendered = MarketingEmailRenderer.RenderContactMessage(payload, branding);
+
+                // The store answers the visitor directly.
+                replyTo = payload.Email;
+                break;
+            }
+
+            default:
+            {
+                var payload = OrderEmailPayload.FromJson(message.Payload);
+                var code = message.EncryptedToken is null ? null : await protector.UnprotectAsync(message.EncryptedToken, message.Id, cancellationToken);
+                rendered = OrderEmailRenderer.Render(message.Template, payload, code, branding);
+                break;
+            }
+        }
+
+        var fromName = string.IsNullOrWhiteSpace(settings.FromName) ? store.StoreName : settings.FromName.Trim();
         return new EmailMessage(message.Recipient, settings.FromAddress.Trim(), fromName, replyTo, rendered.Subject, rendered.Html, rendered.Text);
     }
 
@@ -210,11 +242,26 @@ public sealed class EmailDispatcher(
                 _settings.ContactEmail,
                 _settings.Phone,
                 _settings.BusinessAddress,
-                string.IsNullOrWhiteSpace(options.Value.LogoUrl) ? null : options.Value.LogoUrl.Trim(),
+                LogoUrl(_settings),
                 storefront.Value.IsConfigured ? storefront.Value.BaseUrl!.TrimEnd('/') : null);
         }
 
         return (_branding, _settings);
+    }
+
+    /// <summary>
+    /// The logo of the store settings (its PNG rendition for emails) when the media base URL is https (CloudFront); otherwise
+    /// <c>Email:LogoUrl</c>; otherwise none (the store name is the header).
+    /// </summary>
+    internal string? LogoUrl(StoreSettingsRecord settings)
+    {
+        var media = mediaOptions.Value;
+        if (settings.LogoKey is { } key && media.BaseUrl is { } baseUrl && baseUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+        {
+            return media.UrlFor(Application.Media.MediaKeys.EmailPngKey(key));
+        }
+
+        return string.IsNullOrWhiteSpace(options.Value.LogoUrl) ? null : options.Value.LogoUrl.Trim();
     }
 
     private async Task<EmailOutboxStatus> CompleteAsync(

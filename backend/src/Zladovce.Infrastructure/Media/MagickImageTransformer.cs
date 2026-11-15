@@ -13,7 +13,7 @@ public sealed class MagickImageTransformer : IImageTransformer
 {
     private const int WebPQuality = 82;
 
-    public TransformedImage Transform(byte[] source)
+    public TransformedImage Transform(byte[] source, int? emailPngMaxWidth = null)
     {
         var format = DetectFormat(source) ?? throw new InvalidImageException("The file is not a JPEG, PNG or WebP image.");
 
@@ -56,7 +56,21 @@ public sealed class MagickImageTransformer : IImageTransformer
                 renditions.Add(new ImageRendition(targetWidth, rendition.ToByteArray()));
             }
 
-            return new TransformedImage(width, height, renditions);
+            byte[]? emailPng = null;
+            if (emailPngMaxWidth is > 0 and var maxWidth)
+            {
+                using var png = image.Clone();
+                if (width > maxWidth)
+                {
+                    png.Resize((uint)maxWidth, 0);
+                }
+
+                png.Strip();
+                png.Format = MagickFormat.Png;
+                emailPng = png.ToByteArray();
+            }
+
+            return new TransformedImage(width, height, renditions, emailPng);
         }
         catch (MagickException exception)
         {

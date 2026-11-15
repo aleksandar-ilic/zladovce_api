@@ -90,3 +90,6 @@ public sealed class RateLimitedException(TimeSpan retryAfter)
     /// <summary>Whole seconds until the current window ends (at least 1); sent as the <c>Retry-After</c> header.</summary>
     public int RetryAfterSeconds { get; } = Math.Max(1, (int)Math.Ceiling(retryAfter.TotalSeconds));
 }
+
+/// <summary>503 – an external service the operation depends on (the identity provider) failed. Nothing was changed.</summary>
+public sealed class DependencyFailedException(string code, string title, string detail) : AppException(code, title, detail);

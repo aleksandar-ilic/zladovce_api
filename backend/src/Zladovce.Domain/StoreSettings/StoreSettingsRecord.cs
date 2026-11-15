@@ -21,6 +21,10 @@ public sealed class StoreSettingsRecord
     // Identity
     public string StoreName { get; private set; } = null!;
     public string? LogoKey { get; private set; }
+
+    /// <summary>Size of the logo original in pixels (set together with <see cref="LogoKey"/>).</summary>
+    public int? LogoWidth { get; private set; }
+    public int? LogoHeight { get; private set; }
     public string? ContactEmail { get; private set; }
     public string? Phone { get; private set; }
     public string? BusinessAddress { get; private set; }
@@ -125,6 +129,33 @@ public sealed class StoreSettingsRecord
         OtherLinks = [.. values.OtherLinks.Select(l => new StoreLink(l.Label.Trim(), l.Url.Trim()))];
         DefaultSeoTitle = Text.NullIfBlank(values.DefaultSeoTitle);
         DefaultSeoDescription = Text.NullIfBlank(values.DefaultSeoDescription);
+    }
+
+    /// <summary>Sets the processed logo (storage key <c>media/logos/{id}</c>).</summary>
+    public void SetLogo(string storageKey, int width, int height, Guid adminId, DateTimeOffset now)
+    {
+        if (string.IsNullOrWhiteSpace(storageKey) || width <= 0 || height <= 0)
+        {
+            throw new DomainException("Invalid logo.");
+        }
+
+        LogoKey = storageKey;
+        LogoWidth = width;
+        LogoHeight = height;
+        Touch(adminId, now);
+    }
+
+    public void RemoveLogo(Guid adminId, DateTimeOffset now)
+    {
+        if (LogoKey is null)
+        {
+            return;
+        }
+
+        LogoKey = null;
+        LogoWidth = null;
+        LogoHeight = null;
+        Touch(adminId, now);
     }
 
     /// <summary>The shipping and minimum-order rules as a value, for cart and order totals (<see cref="CartTotals"/>).</summary>

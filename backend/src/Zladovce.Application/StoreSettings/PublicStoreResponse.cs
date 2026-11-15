@@ -2,18 +2,29 @@ using Zladovce.Domain.StoreSettings;
 
 namespace Zladovce.Application.StoreSettings;
 
+/// <summary>The store logo. A rendition is at <c>{baseUrl}/{width}.webp</c>; <c>emailPngUrl</c> is a PNG of at most 320 px (emails).</summary>
+public sealed record StoreLogo(string Key, string BaseUrl, IReadOnlyList<int> Widths, int Width, int Height, string EmailPngUrl)
+{
+    public static StoreLogo? From(Media.MediaOptions options, StoreSettingsRecord settings) =>
+        settings is { LogoKey: { } key, LogoWidth: { } width, LogoHeight: { } height }
+            ? new StoreLogo(key, options.UrlFor(key), Media.RenditionPlan.WidthsFor(width), width, height, options.UrlFor(Media.MediaKeys.EmailPngKey(key)))
+            : null;
+}
+
 /// <summary>Response of <c>GET /api/v1/store</c>: the part of store settings that is safe to show publicly.</summary>
 public sealed record PublicStoreResponse(
     string StoreName,
     string? LogoKey,
+    StoreLogo? Logo,
     PublicStoreContact Contact,
     PublicStoreSocial Social,
     PublicStoreShipping Shipping,
     PublicStoreSeo Seo)
 {
-    public static PublicStoreResponse From(StoreSettingsRecord settings) => new(
+    public static PublicStoreResponse From(StoreSettingsRecord settings, Media.MediaOptions media) => new(
         settings.StoreName,
         settings.LogoKey,
+        StoreLogo.From(media, settings),
         new PublicStoreContact(settings.ContactEmail, settings.Phone, settings.BusinessAddress),
         new PublicStoreSocial(
             settings.FacebookUrl,

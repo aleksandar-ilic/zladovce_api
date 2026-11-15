@@ -54,6 +54,20 @@ public sealed class AdminUser
         };
     }
 
+    /// <summary>
+    /// An administrator invited by the Owner: the identity already exists in the identity provider (<paramref name="cognitoSub"/>),
+    /// the person has not signed in yet (<see cref="LastLoginAt"/> null).
+    /// </summary>
+    public static AdminUser Invite(string cognitoSub, string email, string fullName, AdminRole role, DateTimeOffset now)
+    {
+        var admin = Create(cognitoSub, email, fullName, role, now);
+        admin.LastLoginAt = null;
+        return admin;
+    }
+
+    /// <summary>The Owner changes the role. Returns true when something changed.</summary>
+    public bool ChangeRole(AdminRole role, DateTimeOffset now) => SyncRole(role, now);
+
     /// <summary>Aligns the stored role with the identity provider. Returns true when something changed.</summary>
     public bool SyncRole(AdminRole role, DateTimeOffset now)
     {

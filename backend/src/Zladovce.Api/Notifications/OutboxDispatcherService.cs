@@ -39,6 +39,9 @@ public sealed class OutboxDispatcherService(
             await using var scope = scopes.CreateAsyncScope();
             await scope.ServiceProvider.GetRequiredService<IEmailDispatcher>()
                 .DispatchAsync(Math.Max(1, settings.BatchSize), interval + TimeSpan.FromMinutes(1), stoppingToken);
+
+            // Same as the outbox worker Lambda: the storefront rebuild webhook (only when Site:RebuildWebhookUrl is set).
+            await scope.ServiceProvider.GetRequiredService<Infrastructure.Site.ISiteRebuildDispatcher>().RunAsync(stoppingToken);
         }
         catch (Exception exception) when (exception is not OperationCanceledException || !stoppingToken.IsCancellationRequested)
         {

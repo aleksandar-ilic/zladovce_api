@@ -43,6 +43,21 @@ public static class DependencyInjection
         services.AddScoped<IOrderNotifier, OrderNotifier>();
         services.AddScoped<ITrackingService, TrackingService>();
         services.AddScoped<IAdminEmailService, AdminEmailService>();
+
+        // Phase 7: analytics, content, marketing, administrators, audit log.
+        services.AddScoped<Analytics.IDashboardService, Analytics.DashboardService>();
+        services.AddScoped<Analytics.IReportService, Analytics.ReportService>();
+        services.AddScoped<Analytics.IExpenseService, Analytics.ExpenseService>();
+        services.AddSingleton<Content.IRichHtmlSanitizer, Content.RichHtmlSanitizer>();
+        services.AddScoped<Content.IBlogAdminService, Content.BlogAdminService>();
+        services.AddScoped<Content.IPublicBlogService, Content.PublicBlogService>();
+        services.AddScoped<Content.ICmsService, Content.CmsService>();
+        services.AddScoped<Content.IFaqService, Content.FaqService>();
+        services.AddScoped<Content.ITestimonialService, Content.TestimonialService>();
+        services.AddScoped<Marketing.INewsletterService, Marketing.NewsletterService>();
+        services.AddScoped<Marketing.IContactService, Marketing.ContactService>();
+        services.AddScoped<IAdminUserService, AdminUserService>();
+        services.AddScoped<IAuditLogService, AuditLogService>();
         services.AddImageProcessing();
 
         // Every request DTO validator in this assembly; the API runs them automatically.

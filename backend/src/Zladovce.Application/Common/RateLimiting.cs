@@ -56,8 +56,20 @@ public static class RateLimitPolicies
     /// </summary>
     public const string TrackingLookupGlobal = "TrackingLookupGlobal";
 
+    /// <summary><c>POST /api/v1/contact</c>: 3 per 10 minutes per IP.</summary>
+    public const string ContactForm = "ContactForm";
+
+    /// <summary><c>POST /api/v1/newsletter/subscriptions</c>: 3 per 10 minutes per IP.</summary>
+    public const string NewsletterSignup = "NewsletterSignup";
+
+    /// <summary><c>POST /api/v1/newsletter/confirm</c> and <c>/unsubscribe</c>: 20 per 10 minutes per IP (tokens are signed; this only stops floods).</summary>
+    public const string NewsletterToken = "NewsletterToken";
+
     public static readonly IReadOnlyDictionary<string, RateLimitPolicy> Defaults = new Dictionary<string, RateLimitPolicy>(StringComparer.Ordinal)
     {
+        [ContactForm] = new(ContactForm, 3, TimeSpan.FromMinutes(10)),
+        [NewsletterSignup] = new(NewsletterSignup, 3, TimeSpan.FromMinutes(10)),
+        [NewsletterToken] = new(NewsletterToken, 20, TimeSpan.FromMinutes(10)),
         [CreateOrder] = new(CreateOrder, 5, TimeSpan.FromMinutes(10)),
         [TrackingLookup] = new(TrackingLookup, 10, TimeSpan.FromMinutes(10)),
         [TrackingLookupGlobal] = new(TrackingLookupGlobal, 300, TimeSpan.FromMinutes(1)),

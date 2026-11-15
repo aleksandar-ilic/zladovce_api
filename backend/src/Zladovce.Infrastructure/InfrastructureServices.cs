@@ -44,7 +44,14 @@ public static class InfrastructureServices
             {
                 options.AddInterceptors(new AuditSaveChangesInterceptor(requestContext, sp.GetRequiredService<TimeProvider>()));
             }
+
+            // Content changes request a storefront rebuild (processed by the outbox worker).
+            options.AddInterceptors(new Site.SiteRebuildInterceptor(
+                sp.GetRequiredService<TimeProvider>(), sp.GetService<ILogger<Site.SiteRebuildInterceptor>>()));
         });
+
+        services.Configure<Site.SiteOptions>(configuration.GetSection(Site.SiteOptions.SectionName));
+        services.AddScoped<Site.ISiteRebuildDispatcher, Site.SiteRebuildDispatcher>();
 
         services.AddScoped<IZladovceDbContext>(sp => sp.GetRequiredService<ZladovceDbContext>());
         services.AddScoped<DatabaseMigrator>();
@@ -79,6 +86,18 @@ public static class InfrastructureServices
 
         services.Configure<CognitoOptions>(configuration.GetSection(CognitoOptions.SectionName));
         services.AddSingleton<IAdminProfileLookup, CognitoAdminProfileLookup>();
+        services.AddScoped<Application.Identity.IAdminUserLocks, AdminUserLocks>();
+
+        // Inviting administrators: Cognito when the user pool is configured, otherwise (Development) only the database row.
+        var cognito = configuration.GetSection(CognitoOptions.SectionName).Get<CognitoOptions>() ?? new CognitoOptions();
+        if (cognito.IsConfigured)
+        {
+            services.AddSingleton<Application.Identity.IIdentityProvisioning, CognitoIdentityProvisioning>();
+        }
+        else
+        {
+            services.AddSingleton<Application.Identity.IIdentityProvisioning, Application.Identity.DevelopmentIdentityProvisioning>();
+        }
 
         return services;
     }

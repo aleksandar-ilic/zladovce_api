@@ -46,7 +46,8 @@ public sealed record ImageRendition(int Width, byte[] Content);
 /// <summary>Result of re-encoding an image.</summary>
 /// <param name="Width">Width of the original after its orientation was applied.</param>
 /// <param name="Height">Height of the original after its orientation was applied.</param>
-public sealed record TransformedImage(int Width, int Height, IReadOnlyList<ImageRendition> Renditions);
+/// <param name="EmailPng">PNG for emails (logos only), at most <see cref="MediaKeys.EmailLogoMaxWidth"/> wide.</param>
+public sealed record TransformedImage(int Width, int Height, IReadOnlyList<ImageRendition> Renditions, byte[]? EmailPng = null);
 
 /// <summary>
 /// Decodes an untrusted upload and re-encodes it: verifies that it really is a JPEG, PNG or WebP image,
@@ -54,8 +55,9 @@ public sealed record TransformedImage(int Width, int Height, IReadOnlyList<Image
 /// </summary>
 public interface IImageTransformer
 {
+    /// <param name="emailPngMaxWidth">When set, also encodes a PNG at most this wide (email logo).</param>
     /// <exception cref="InvalidImageException">The content is not an acceptable image.</exception>
-    TransformedImage Transform(byte[] source);
+    TransformedImage Transform(byte[] source, int? emailPngMaxWidth = null);
 }
 
 /// <summary>A processed image as stored under <c>media/</c>.</summary>
@@ -154,7 +156,7 @@ public sealed class ImageProcessor(
         TransformedImage transformed;
         try
         {
-            transformed = transformer.Transform(upload.Content);
+            transformed = transformer.Transform(upload.Content, purpose == MediaPurpose.Logo ? MediaKeys.EmailLogoMaxWidth : null);
         }
         catch (InvalidImageException exception)
         {
@@ -169,6 +171,11 @@ public sealed class ImageProcessor(
                 MediaRules.WebPContentType,
                 MediaRules.ImmutableCacheControl,
                 cancellationToken);
+        }
+
+        if (transformed.EmailPng is { } png)
+        {
+            await storage.WriteAsync(MediaKeys.EmailPngKey(storageKey), png, "image/png", MediaRules.ImmutableCacheControl, cancellationToken);
         }
 
         var manifest = new ImageManifest(
@@ -228,7 +235,10 @@ public sealed class ImageProcessor(
     {
         try
         {
-            await storage.DeleteAsync(MediaKeys.AllKeys(storageKey, originalWidth), cancellationToken);
+            IReadOnlyList<string> keys = storageKey.StartsWith(MediaKeys.MediaPrefix + "logos/", StringComparison.Ordinal)
+                ? [.. MediaKeys.AllKeys(storageKey, originalWidth), MediaKeys.EmailPngKey(storageKey)]
+                : MediaKeys.AllKeys(storageKey, originalWidth);
+            await storage.DeleteAsync(keys, cancellationToken);
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {

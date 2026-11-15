@@ -21,6 +21,7 @@ public static class ProblemMapper
         InvalidStatusTransitionException e =>
             ApiProblem.Create(StatusCodes.Status409Conflict, e.Code, e.Title, e.Detail) with { AllowedNextStatuses = e.AllowedNextStatuses },
         RateLimitedException => FromStatusCode(StatusCodes.Status429TooManyRequests),
+        DependencyFailedException e => ApiProblem.Create(StatusCodes.Status503ServiceUnavailable, e.Code, e.Title, e.Detail),
 
         // A domain invariant refused the data. The developer message is logged, not returned.
         DomainException => ApiProblem.Create(

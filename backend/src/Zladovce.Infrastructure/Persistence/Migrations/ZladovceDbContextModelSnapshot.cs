@@ -383,6 +383,305 @@ namespace Zladovce.Infrastructure.Persistence.Migrations
                         });
                 });
 
+            modelBuilder.Entity("Zladovce.Domain.Content.BlogCategory", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("name");
+
+                    b.Property<string>("Slug")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("slug");
+
+                    b.Property<int>("SortOrder")
+                        .HasColumnType("integer")
+                        .HasColumnName("sort_order");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("Id")
+                        .HasName("pk_blog_categories");
+
+                    b.HasIndex("Slug")
+                        .IsUnique()
+                        .HasDatabaseName("ix_blog_categories_slug");
+
+                    b.ToTable("blog_categories", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_blog_categories_sort_order", "sort_order >= 0");
+                        });
+                });
+
+            modelBuilder.Entity("Zladovce.Domain.Content.BlogPost", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<Guid>("AuthorAdminId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("author_admin_id");
+
+                    b.Property<Guid?>("CategoryId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("category_id");
+
+                    b.Property<string>("ContentHtml")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("content_html");
+
+                    b.Property<int?>("CoverImageHeight")
+                        .HasColumnType("integer")
+                        .HasColumnName("cover_image_height");
+
+                    b.Property<string>("CoverImageKey")
+                        .HasColumnType("text")
+                        .HasColumnName("cover_image_key");
+
+                    b.Property<int?>("CoverImageWidth")
+                        .HasColumnType("integer")
+                        .HasColumnName("cover_image_width");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<DateTimeOffset?>("DeletedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("deleted_at");
+
+                    b.Property<string>("Excerpt")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("excerpt");
+
+                    b.Property<DateTimeOffset?>("PublishedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("published_at");
+
+                    b.Property<string>("SeoDescription")
+                        .HasColumnType("text")
+                        .HasColumnName("seo_description");
+
+                    b.Property<string>("SeoTitle")
+                        .HasColumnType("text")
+                        .HasColumnName("seo_title");
+
+                    b.Property<string>("Slug")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("slug");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("status");
+
+                    b.Property<string>("Title")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("title");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
+                    b.HasKey("Id")
+                        .HasName("pk_blog_posts");
+
+                    b.HasIndex("AuthorAdminId")
+                        .HasDatabaseName("ix_blog_posts_author_admin_id");
+
+                    b.HasIndex("CategoryId")
+                        .HasDatabaseName("ix_blog_posts_category_id");
+
+                    b.HasIndex("Slug")
+                        .IsUnique()
+                        .HasDatabaseName("ix_blog_posts_slug")
+                        .HasFilter("deleted_at IS NULL");
+
+                    b.HasIndex("Status", "PublishedAt")
+                        .IsDescending(false, true)
+                        .HasDatabaseName("ix_blog_posts_status_published_at")
+                        .HasFilter("deleted_at IS NULL");
+
+                    b.ToTable("blog_posts", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_blog_posts_archived", "deleted_at IS NULL OR status = 'Draft'");
+
+                            t.HasCheckConstraint("ck_blog_posts_cover", "(cover_image_key IS NULL AND cover_image_width IS NULL AND cover_image_height IS NULL) OR (cover_image_key IS NOT NULL AND cover_image_width > 0 AND cover_image_height > 0)");
+
+                            t.HasCheckConstraint("ck_blog_posts_published", "status <> 'Published' OR published_at IS NOT NULL");
+
+                            t.HasCheckConstraint("ck_blog_posts_status", "status IN ('Draft', 'Published')");
+                        });
+                });
+
+            modelBuilder.Entity("Zladovce.Domain.Content.CmsPage", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("ContentJson")
+                        .HasColumnType("jsonb")
+                        .HasColumnName("content");
+
+                    b.Property<string>("Key")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("key");
+
+                    b.Property<string>("SeoDescription")
+                        .HasColumnType("text")
+                        .HasColumnName("seo_description");
+
+                    b.Property<string>("SeoTitle")
+                        .HasColumnType("text")
+                        .HasColumnName("seo_title");
+
+                    b.Property<string>("Title")
+                        .HasColumnType("text")
+                        .HasColumnName("title");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.Property<Guid?>("UpdatedByAdminId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("updated_by_admin_id");
+
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
+                    b.HasKey("Id")
+                        .HasName("pk_cms_pages");
+
+                    b.HasIndex("Key")
+                        .IsUnique()
+                        .HasDatabaseName("ix_cms_pages_key");
+
+                    b.HasIndex("UpdatedByAdminId")
+                        .HasDatabaseName("ix_cms_pages_updated_by_admin_id");
+
+                    b.ToTable("cms_pages", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_cms_pages_key", "key IN ('home', 'about', 'privacy', 'terms', 'delivery')");
+                        });
+                });
+
+            modelBuilder.Entity("Zladovce.Domain.Content.FaqItem", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("Answer")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("answer");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<bool>("IsPublished")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_published");
+
+                    b.Property<string>("Question")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("question");
+
+                    b.Property<int>("SortOrder")
+                        .HasColumnType("integer")
+                        .HasColumnName("sort_order");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("Id")
+                        .HasName("pk_faq_items");
+
+                    b.HasIndex("SortOrder")
+                        .HasDatabaseName("ix_faq_items_sort_order");
+
+                    b.ToTable("faq_items", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_faq_items_sort_order", "sort_order >= 0");
+                        });
+                });
+
+            modelBuilder.Entity("Zladovce.Domain.Content.Testimonial", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("AuthorName")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("author_name");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<bool>("IsPublished")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_published");
+
+                    b.Property<string>("Place")
+                        .HasColumnType("text")
+                        .HasColumnName("place");
+
+                    b.Property<int>("SortOrder")
+                        .HasColumnType("integer")
+                        .HasColumnName("sort_order");
+
+                    b.Property<string>("Text")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("text");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("Id")
+                        .HasName("pk_testimonials");
+
+                    b.ToTable("testimonials", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_testimonials_sort_order", "sort_order >= 0");
+                        });
+                });
+
             modelBuilder.Entity("Zladovce.Domain.Customers.Address", b =>
                 {
                     b.Property<Guid>("Id")
@@ -466,6 +765,57 @@ namespace Zladovce.Infrastructure.Persistence.Migrations
                         .HasDatabaseName("ix_customers_email");
 
                     b.ToTable("customers", (string)null);
+                });
+
+            modelBuilder.Entity("Zladovce.Domain.Finance.Expense", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<decimal>("Amount")
+                        .HasColumnType("numeric(12,2)")
+                        .HasColumnName("amount");
+
+                    b.Property<string>("Category")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("category");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<Guid>("CreatedByAdminId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("created_by_admin_id");
+
+                    b.Property<string>("Description")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("description");
+
+                    b.Property<DateOnly>("ExpenseDate")
+                        .HasColumnType("date")
+                        .HasColumnName("expense_date");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("Id")
+                        .HasName("pk_expenses");
+
+                    b.HasIndex("CreatedByAdminId")
+                        .HasDatabaseName("ix_expenses_created_by_admin_id");
+
+                    b.HasIndex("ExpenseDate")
+                        .HasDatabaseName("ix_expenses_expense_date");
+
+                    b.ToTable("expenses", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_expenses_amount", "amount > 0");
+                        });
                 });
 
             modelBuilder.Entity("Zladovce.Domain.Identity.AdminUser", b =>
@@ -620,6 +970,97 @@ namespace Zladovce.Infrastructure.Persistence.Migrations
                         });
                 });
 
+            modelBuilder.Entity("Zladovce.Domain.Marketing.ContactMessage", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("Email")
+                        .IsRequired()
+                        .HasColumnType("citext")
+                        .HasColumnName("email");
+
+                    b.Property<string>("Message")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("message");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("name");
+
+                    b.Property<DateTimeOffset?>("ReadAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("read_at");
+
+                    b.Property<Guid?>("ReadByAdminId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("read_by_admin_id");
+
+                    b.HasKey("Id")
+                        .HasName("pk_contact_messages");
+
+                    b.HasIndex("CreatedAt")
+                        .IsDescending()
+                        .HasDatabaseName("ix_contact_messages_created_at");
+
+                    b.HasIndex("ReadByAdminId")
+                        .HasDatabaseName("ix_contact_messages_read_by_admin_id");
+
+                    b.ToTable("contact_messages", (string)null);
+                });
+
+            modelBuilder.Entity("Zladovce.Domain.Marketing.NewsletterSubscriber", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<DateTimeOffset>("ConfirmationSentAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("confirmation_sent_at");
+
+                    b.Property<DateTimeOffset?>("ConfirmedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("confirmed_at");
+
+                    b.Property<DateTimeOffset>("ConsentedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("consented_at");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("Email")
+                        .IsRequired()
+                        .HasColumnType("citext")
+                        .HasColumnName("email");
+
+                    b.Property<DateTimeOffset?>("UnsubscribedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("unsubscribed_at");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("Id")
+                        .HasName("pk_newsletter_subscribers");
+
+                    b.HasIndex("Email")
+                        .IsUnique()
+                        .HasDatabaseName("ix_newsletter_subscribers_email");
+
+                    b.ToTable("newsletter_subscribers", (string)null);
+                });
+
             modelBuilder.Entity("Zladovce.Domain.Notifications.EmailLog", b =>
                 {
                     b.Property<Guid>("Id")
@@ -751,7 +1192,7 @@ namespace Zladovce.Infrastructure.Persistence.Migrations
 
                             t.HasCheckConstraint("ck_email_outbox_status", "status IN ('Pending', 'Processing', 'Sent', 'Dead')");
 
-                            t.HasCheckConstraint("ck_email_outbox_template", "template IN ('OrderReceived', 'OrderAccepted', 'OrderPreparing', 'OrderShipped', 'OrderDelivered', 'OrderCancelled')");
+                            t.HasCheckConstraint("ck_email_outbox_template", "template IN ('OrderReceived', 'OrderAccepted', 'OrderPreparing', 'OrderShipped', 'OrderDelivered', 'OrderCancelled', 'NewsletterConfirm', 'ContactMessage')");
                         });
                 });
 
@@ -1171,6 +1612,41 @@ namespace Zladovce.Infrastructure.Persistence.Migrations
                     b.ToTable("shipments", (string)null);
                 });
 
+            modelBuilder.Entity("Zladovce.Domain.Site.SiteRebuildRequest", b =>
+                {
+                    b.Property<int>("Id")
+                        .HasColumnType("integer")
+                        .HasColumnName("id");
+
+                    b.Property<string>("LastResult")
+                        .HasColumnType("text")
+                        .HasColumnName("last_result");
+
+                    b.Property<DateTimeOffset?>("LastTriggeredAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("last_triggered_at");
+
+                    b.Property<bool>("Pending")
+                        .HasColumnType("boolean")
+                        .HasColumnName("pending");
+
+                    b.Property<DateTimeOffset?>("RequestedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("requested_at");
+
+                    b.Property<DateTimeOffset?>("ScheduledCheckedUntil")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("scheduled_checked_until");
+
+                    b.HasKey("Id")
+                        .HasName("pk_site_rebuild_requests");
+
+                    b.ToTable("site_rebuild_requests", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_site_rebuild_requests_singleton", "id = 1");
+                        });
+                });
+
             modelBuilder.Entity("Zladovce.Domain.StoreSettings.StoreSettingsRecord", b =>
                 {
                     b.Property<int>("Id")
@@ -1213,9 +1689,17 @@ namespace Zladovce.Infrastructure.Persistence.Migrations
                         .HasColumnType("text")
                         .HasColumnName("instagram_url");
 
+                    b.Property<int?>("LogoHeight")
+                        .HasColumnType("integer")
+                        .HasColumnName("logo_height");
+
                     b.Property<string>("LogoKey")
                         .HasColumnType("text")
                         .HasColumnName("logo_key");
+
+                    b.Property<int?>("LogoWidth")
+                        .HasColumnType("integer")
+                        .HasColumnName("logo_width");
 
                     b.Property<decimal?>("MinOrderAmount")
                         .HasColumnType("numeric(12,2)")
@@ -1383,6 +1867,31 @@ namespace Zladovce.Infrastructure.Persistence.Migrations
                         .HasConstraintName("fk_product_variants_products_product_id");
                 });
 
+            modelBuilder.Entity("Zladovce.Domain.Content.BlogPost", b =>
+                {
+                    b.HasOne("Zladovce.Domain.Identity.AdminUser", null)
+                        .WithMany()
+                        .HasForeignKey("AuthorAdminId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_blog_posts_admin_users_author_admin_id");
+
+                    b.HasOne("Zladovce.Domain.Content.BlogCategory", null)
+                        .WithMany()
+                        .HasForeignKey("CategoryId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_blog_posts_blog_categories_category_id");
+                });
+
+            modelBuilder.Entity("Zladovce.Domain.Content.CmsPage", b =>
+                {
+                    b.HasOne("Zladovce.Domain.Identity.AdminUser", null)
+                        .WithMany()
+                        .HasForeignKey("UpdatedByAdminId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_cms_pages_admin_users_updated_by_admin_id");
+                });
+
             modelBuilder.Entity("Zladovce.Domain.Customers.Address", b =>
                 {
                     b.HasOne("Zladovce.Domain.Customers.Customer", null)
@@ -1391,6 +1900,16 @@ namespace Zladovce.Infrastructure.Persistence.Migrations
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired()
                         .HasConstraintName("fk_addresses_customers_customer_id");
+                });
+
+            modelBuilder.Entity("Zladovce.Domain.Finance.Expense", b =>
+                {
+                    b.HasOne("Zladovce.Domain.Identity.AdminUser", null)
+                        .WithMany()
+                        .HasForeignKey("CreatedByAdminId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_expenses_admin_users_created_by_admin_id");
                 });
 
             modelBuilder.Entity("Zladovce.Domain.Inventory.InventoryItem", b =>
@@ -1423,6 +1942,15 @@ namespace Zladovce.Infrastructure.Persistence.Migrations
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired()
                         .HasConstraintName("fk_inventory_movements_product_variants_variant_id");
+                });
+
+            modelBuilder.Entity("Zladovce.Domain.Marketing.ContactMessage", b =>
+                {
+                    b.HasOne("Zladovce.Domain.Identity.AdminUser", null)
+                        .WithMany()
+                        .HasForeignKey("ReadByAdminId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_contact_messages_admin_users_read_by_admin_id");
                 });
 
             modelBuilder.Entity("Zladovce.Domain.Notifications.EmailLog", b =>

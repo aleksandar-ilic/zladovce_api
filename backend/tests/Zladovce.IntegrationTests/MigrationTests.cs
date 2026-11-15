@@ -14,12 +14,13 @@ public class MigrationTests(PostgresFixture postgres)
         var first = await PostgresFixture.RunMigrationsAsync(connectionString);
         var second = await PostgresFixture.RunMigrationsAsync(connectionString);
 
-        Assert.Equal(4, first.AppliedMigrations.Count);
+        Assert.Equal(5, first.AppliedMigrations.Count);
         Assert.EndsWith("_InitialFoundation", first.AppliedMigrations[0]);
         Assert.EndsWith("_CatalogAndInventory", first.AppliedMigrations[1]);
         Assert.EndsWith("_CheckoutAndOrders", first.AppliedMigrations[2]);
         Assert.EndsWith("_TrackingAndNotifications", first.AppliedMigrations[3]);
-        Assert.Equal(first.AppliedMigrations[3], first.CurrentMigration);
+        Assert.EndsWith("_AnalyticsAndContent", first.AppliedMigrations[4]);
+        Assert.Equal(first.AppliedMigrations[4], first.CurrentMigration);
 
         Assert.Empty(second.AppliedMigrations);
         Assert.Equal(first.CurrentMigration, second.CurrentMigration);
@@ -37,10 +38,11 @@ public class MigrationTests(PostgresFixture postgres)
 
         Assert.Equal(
             [
-                "addresses", "admin_users", "audit_logs", "categories", "courier_companies", "customers", "email_logs", "email_outbox",
-                "inventory", "inventory_movements", "order_items", "order_notes", "order_number_counters", "order_status_history",
+                "addresses", "admin_users", "audit_logs", "blog_categories", "blog_posts", "categories", "cms_pages", "contact_messages",
+                "courier_companies", "customers", "email_logs", "email_outbox", "expenses", "faq_items",
+                "inventory", "inventory_movements", "newsletter_subscribers", "order_items", "order_notes", "order_number_counters", "order_status_history",
                 "order_tracking_tokens", "orders", "product_images", "product_variants",
-                "products", "rate_limit_buckets", "shipments", "store_settings",
+                "products", "rate_limit_buckets", "shipments", "site_rebuild_requests", "store_settings", "testimonials",
             ],
             tables!);
     }

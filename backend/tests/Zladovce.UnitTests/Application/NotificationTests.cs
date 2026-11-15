@@ -244,7 +244,7 @@ public class OrderEmailRendererTests
         };
         var branding = Branding with { StoreName = attack, ContactEmail = attack, Phone = attack, BusinessAddress = attack };
 
-        foreach (var template in Enum.GetValues<EmailTemplate>())
+        foreach (var template in Enum.GetValues<EmailTemplate>().Where(t => t.ToString().StartsWith("Order", StringComparison.Ordinal)))
         {
             var html = OrderEmailRenderer.Render(template, payload, TrackingCode.Generate(), branding).Html;
 

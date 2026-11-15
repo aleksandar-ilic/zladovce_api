@@ -8,6 +8,7 @@ using Zladovce.Application.Notifications;
 using Zladovce.Infrastructure;
 using Zladovce.Infrastructure.Notifications;
 using Zladovce.Infrastructure.RateLimiting;
+using Zladovce.Infrastructure.Site;
 using LogLevel = Microsoft.Extensions.Logging.LogLevel;
 
 namespace Zladovce.Lambda;
@@ -21,6 +22,9 @@ public sealed class OutboxWorkerResponse
     public required int Dead { get; init; }
     public required int Expired { get; init; }
     public required int PurgedRateLimitBuckets { get; init; }
+
+    /// <summary>Storefront rebuild check: NotConfigured, Idle, Waiting, Triggered or Failed.</summary>
+    public required string SiteRebuild { get; init; }
 }
 
 /// <summary>
@@ -29,7 +33,8 @@ public sealed class OutboxWorkerResponse
 /// Sends at most <c>Email__Dispatcher__BatchSize</c> due emails (default 50) and stops claiming new ones when less than one send
 /// timeout of the invocation's remaining time is left; deletes expired rate-limit windows. A failed email never fails the
 /// invocation (it is retried with back-off); a database failure does (the next schedule tries again).
-/// Configuration: <c>Database__*</c> (app role, IAM auth), <c>Email__*</c>, <c>Storefront__BaseUrl</c>,
+/// Also checks the storefront rebuild webhook (<c>Site__RebuildWebhookUrl</c> / <c>Site__RebuildWebhookUrlSecretArn</c>).
+/// Configuration: <c>Database__*</c> (app role, IAM auth), <c>Email__*</c>, <c>Storefront__BaseUrl</c>, <c>Media__BaseUrl</c> (logo in emails),
 /// <c>Tracking__TokenEncryptionKeySecretArn</c>.
 /// </summary>
 public sealed class OutboxWorkerFunction
@@ -81,6 +86,19 @@ public sealed class OutboxWorkerFunction
         var result = await scope.ServiceProvider.GetRequiredService<IEmailDispatcher>()
             .DispatchAsync(Math.Max(1, batchSize), budget > TimeSpan.Zero ? budget : TimeSpan.Zero, timeout.Token);
 
+        // The storefront rebuild webhook never fails the run (emails matter more).
+        string rebuild;
+        try
+        {
+            rebuild = (await scope.ServiceProvider.GetRequiredService<ISiteRebuildDispatcher>().RunAsync(timeout.Token)).Outcome;
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            scope.ServiceProvider.GetRequiredService<ILogger<OutboxWorkerFunction>>()
+                .LogWarning("Storefront rebuild check failed: {ExceptionType}.", exception.GetType().Name);
+            rebuild = "Failed";
+        }
+
         return new OutboxWorkerResponse
         {
             Claimed = result.Claimed,
@@ -89,6 +107,7 @@ public sealed class OutboxWorkerFunction
             Dead = result.Dead,
             Expired = result.Expired,
             PurgedRateLimitBuckets = result.PurgedRateLimitBuckets,
+            SiteRebuild = rebuild,
         };
     }
 }

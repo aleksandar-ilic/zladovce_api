@@ -87,10 +87,11 @@ public class PublicStoreResponseTests
     {
         var settings = StoreSettingsRecord.CreateDefault(DateTimeOffset.UnixEpoch);
 
-        var response = PublicStoreResponse.From(settings);
+        var response = PublicStoreResponse.From(settings, new Zladovce.Application.Media.MediaOptions { BaseUrl = "https://cdn.example.test" });
 
         Assert.Equal("Zladovce", response.StoreName);
         Assert.Null(response.LogoKey);
+        Assert.Null(response.Logo);
         Assert.Equal(new PublicStoreContact(null, null, null), response.Contact);
         Assert.Empty(response.Social.OtherLinks);
         Assert.True(response.Shipping.Enabled);

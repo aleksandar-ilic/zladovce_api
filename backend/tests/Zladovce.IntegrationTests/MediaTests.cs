@@ -200,7 +200,7 @@ public class MediaTests : IDisposable
     public async Task Upload_url_request_is_validated()
     {
         var response = await _api.SendAsync(HttpMethod.Post, "/api/v1/admin/media/upload-url",
-            new { fileName = "a.gif", contentType = "image/gif", size = 20 * 1024 * 1024, purpose = "blog" });
+            new { fileName = "a.gif", contentType = "image/gif", size = 20 * 1024 * 1024, purpose = "avatar" });
 
         var problem = await ResponseAssertions.AssertProblemAsync(response, HttpStatusCode.BadRequest, "VALIDATION_FAILED");
         var errors = problem.GetProperty("errors");

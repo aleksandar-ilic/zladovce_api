@@ -456,6 +456,12 @@ Partial index on `(next_attempt_at) WHERE status IN ('Pending','Processing')`.
 | newsletter_subscribers | §5 requires a newsletter section |
 | order_number_counters | Gap-free yearly order numbers (§8) |
 | rate_limit_buckets | Per-IP limits that work across Lambda instances (§9, §15) |
+| order_notes | Internal notes without a status change, so status history keeps one row per transition (Phase 5) |
+| testimonials | §5 shows testimonials only when real ones are provided; owner-managed, empty by default (Phase 7) |
+| contact_messages | Contact form messages stay readable in the admin even if the email to the store is delayed (Phase 7) |
+| site_rebuild_requests | Debounced storefront rebuild after content changes, shared across Lambda instances (Phase 7) |
+
+Phase 7 column changes: `blog_posts.category_id` is nullable; `newsletter_subscribers` has `confirmation_sent_at`, `confirmed_at`, `updated_at` for double opt-in; `cms_pages` has `updated_by_admin_id`, a version column and NULL content while a page is empty (keys `home`, `about`, `privacy`, `terms`, `delivery`); `expenses.category` has no check constraint so the category list can change without a migration; `store_settings` has `logo_width` / `logo_height`. The exact schema is the EF Core migrations in `backend/src/Zladovce.Infrastructure/Persistence/Migrations`.
 
 ## D5. Transactions
 

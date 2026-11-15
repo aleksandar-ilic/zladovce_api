@@ -33,7 +33,20 @@ public sealed class AuditSaveChangesInterceptor(IRequestContext requestContext, 
         [typeof(CourierCompany)] = "CourierCompany",
         [typeof(Shipment)] = "Shipment",
         [typeof(StoreSettingsRecord)] = "StoreSettings",
+        [typeof(Domain.Content.BlogCategory)] = "BlogCategory",
+        [typeof(Domain.Content.BlogPost)] = "BlogPost",
+        [typeof(Domain.Content.CmsPage)] = "CmsPage",
+        [typeof(Domain.Content.FaqItem)] = "FaqItem",
+        [typeof(Domain.Content.Testimonial)] = "Testimonial",
+        [typeof(Domain.Finance.Expense)] = "Expense",
+        [typeof(Domain.Marketing.ContactMessage)] = "ContactMessage",
     };
+
+    /// <summary>
+    /// Large rich-text and JSON columns: the entry records that they changed and their lengths, not the full old and new text
+    /// (the current text is on the record itself).
+    /// </summary>
+    private static readonly HashSet<string> SummarisedProperties = ["ContentHtml", "ContentJson"];
 
     /// <summary>Bookkeeping columns that say nothing about what the administrator changed.</summary>
     private static readonly HashSet<string> IgnoredProperties = ["UpdatedAt", "CreatedAt", "Version", "UpdatedByAdminId"];
@@ -141,8 +154,15 @@ public sealed class AuditSaveChangesInterceptor(IRequestContext requestContext, 
             }
         }
 
+        foreach (var name in SummarisedProperties.Select(ToCamelCase).Where(changes.ContainsKey).ToList())
+        {
+            changes[name] = new FieldChange(Summary(changes[name].Old), Summary(changes[name].New));
+        }
+
         return (verb, changes);
     }
+
+    private static string? Summary(object? value) => value is string text ? $"({text.Length} znakova)" : null;
 
     private static string KeyOf(EntityEntry entry) =>
         string.Join(',', entry.Metadata.FindPrimaryKey()!.Properties.Select(p => entry.Property(p.Name).CurrentValue?.ToString()));

@@ -26,6 +26,10 @@ public static class NotificationServices
                 : new SecretsManagerTrackingKeyProvider(tracking);
         });
         services.TryAddSingleton<ITrackingCodeProtector, AesGcmTrackingCodeProtector>();
+        services.TryAddSingleton<INewsletterTokens, HmacNewsletterTokens>();
+
+        // The email header uses the store logo (its PNG rendition) when the media base URL is set.
+        services.Configure<Application.Media.MediaOptions>(configuration.GetSection(Application.Media.MediaOptions.SectionName));
 
         services.TryAddSingleton<IEmailSender>(sp =>
             sp.GetRequiredService<IOptions<EmailOptions>>().Value.Provider == EmailProvider.Smtp

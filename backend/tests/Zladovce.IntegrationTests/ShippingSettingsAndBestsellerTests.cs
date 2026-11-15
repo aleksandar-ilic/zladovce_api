@@ -106,6 +106,7 @@ public class CourierAndSettingsTests : IAsyncLifetime
     {
         ["version"] = version,
         ["storeName"] = "  Zladovce Test ",
+        ["logoKey"] = null,
         ["contactEmail"] = "info@zladovce.example",
         ["phone"] = "+381 64 000 0000",
         ["businessAddress"] = "Selo bb, 21000 Novi Sad",

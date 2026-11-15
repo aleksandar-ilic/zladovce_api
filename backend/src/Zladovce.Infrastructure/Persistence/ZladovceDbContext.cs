@@ -2,6 +2,10 @@ using Microsoft.EntityFrameworkCore;
 using Zladovce.Application.Common;
 using Zladovce.Domain.Audit;
 using Zladovce.Domain.Catalog;
+using Zladovce.Domain.Content;
+using Zladovce.Domain.Finance;
+using Zladovce.Domain.Marketing;
+using Zladovce.Domain.Site;
 using Zladovce.Domain.Categories;
 using Zladovce.Domain.Customers;
 using Zladovce.Domain.Identity;
@@ -44,6 +48,15 @@ public sealed class ZladovceDbContext(DbContextOptions<ZladovceDbContext> option
     public DbSet<OrderTrackingToken> OrderTrackingTokens => Set<OrderTrackingToken>();
     public DbSet<EmailOutboxMessage> EmailOutbox => Set<EmailOutboxMessage>();
     public DbSet<EmailLog> EmailLogs => Set<EmailLog>();
+    public DbSet<BlogCategory> BlogCategories => Set<BlogCategory>();
+    public DbSet<BlogPost> BlogPosts => Set<BlogPost>();
+    public DbSet<FaqItem> FaqItems => Set<FaqItem>();
+    public DbSet<CmsPage> CmsPages => Set<CmsPage>();
+    public DbSet<Testimonial> Testimonials => Set<Testimonial>();
+    public DbSet<NewsletterSubscriber> NewsletterSubscribers => Set<NewsletterSubscriber>();
+    public DbSet<ContactMessage> ContactMessages => Set<ContactMessage>();
+    public DbSet<Expense> Expenses => Set<Expense>();
+    public DbSet<SiteRebuildRequest> SiteRebuildRequests => Set<SiteRebuildRequest>();
     public DbSet<RateLimitBucket> RateLimitBuckets => Set<RateLimitBucket>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)

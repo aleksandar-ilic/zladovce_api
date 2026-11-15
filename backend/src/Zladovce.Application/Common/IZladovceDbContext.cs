@@ -3,6 +3,10 @@ using Microsoft.EntityFrameworkCore.ChangeTracking;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Zladovce.Domain.Audit;
 using Zladovce.Domain.Catalog;
+using Zladovce.Domain.Content;
+using Zladovce.Domain.Finance;
+using Zladovce.Domain.Marketing;
+using Zladovce.Domain.Site;
 using Zladovce.Domain.Categories;
 using Zladovce.Domain.Customers;
 using Zladovce.Domain.Identity;
@@ -41,6 +45,15 @@ public interface IZladovceDbContext
     DbSet<OrderTrackingToken> OrderTrackingTokens { get; }
     DbSet<EmailOutboxMessage> EmailOutbox { get; }
     DbSet<EmailLog> EmailLogs { get; }
+    DbSet<BlogCategory> BlogCategories { get; }
+    DbSet<BlogPost> BlogPosts { get; }
+    DbSet<FaqItem> FaqItems { get; }
+    DbSet<CmsPage> CmsPages { get; }
+    DbSet<Testimonial> Testimonials { get; }
+    DbSet<NewsletterSubscriber> NewsletterSubscribers { get; }
+    DbSet<ContactMessage> ContactMessages { get; }
+    DbSet<Expense> Expenses { get; }
+    DbSet<SiteRebuildRequest> SiteRebuildRequests { get; }
 
     /// <summary>Transactions. Modules share one context so that a business operation is one transaction.</summary>
     DatabaseFacade Database { get; }

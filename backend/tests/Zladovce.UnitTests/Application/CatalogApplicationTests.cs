@@ -268,7 +268,7 @@ public class CatalogValidatorTests
     [InlineData("image/gif", 100, "product")]
     [InlineData("image/jpeg", 0, "product")]
     [InlineData("image/jpeg", 10 * 1024 * 1024 + 1, "product")]
-    [InlineData("image/jpeg", 100, "blog")]
+    [InlineData("image/jpeg", 100, "avatar")]
     public void Upload_requests_are_limited(string contentType, long size, string purpose) =>
         Assert.NotEmpty(Errors(new CreateUploadUrlRequestValidator(), new CreateUploadUrlRequest("a.jpg", contentType, size, purpose)));
 

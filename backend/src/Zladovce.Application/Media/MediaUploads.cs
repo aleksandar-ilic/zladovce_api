@@ -7,7 +7,7 @@ namespace Zladovce.Application.Media;
 /// <param name="FileName">Original file name; informative only, the storage key is generated.</param>
 /// <param name="ContentType"><c>image/jpeg</c>, <c>image/png</c> or <c>image/webp</c>. The upload must send exactly this type.</param>
 /// <param name="Size">File size in bytes, 1 to 10485760 (10 MB).</param>
-/// <param name="Purpose"><c>product</c> or <c>category</c>.</param>
+/// <param name="Purpose"><c>product</c>, <c>category</c>, <c>blog</c> (blog cover and images in posts), <c>page</c> (CMS page images) or <c>logo</c> (store logo).</param>
 public sealed record CreateUploadUrlRequest(string FileName, string ContentType, long Size, string Purpose);
 
 /// <summary>A pre-signed upload. POST a <c>multipart/form-data</c> form to <see cref="UploadUrl"/> with every entry of <see cref="Fields"/> followed by the file in a field named <c>file</c>.</summary>
@@ -39,7 +39,7 @@ public sealed class CreateUploadUrlRequestValidator : AbstractValidator<CreateUp
         RuleFor(r => r.Purpose)
             .NotEmpty()
             .Must(purpose => purpose is null || MediaKeys.TryParsePurpose(purpose, out _))
-            .WithMessage("Namena mora biti 'product' ili 'category'.");
+            .WithMessage("Namena mora biti 'product', 'category', 'blog', 'page' ili 'logo'.");
     }
 }
 

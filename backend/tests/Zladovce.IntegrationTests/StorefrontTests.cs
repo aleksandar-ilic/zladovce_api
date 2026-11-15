@@ -436,6 +436,6 @@ public class SeoRoutesTests : IDisposable
         var entry = products.Single(p => p.GetProperty("slug").GetString() == visible.GetProperty("slug").GetString());
         Assert.Equal(["slug", "updatedAt"], entry.EnumerateObject().Select(p => p.Name));
         Assert.Equal(visible.GetProperty("updatedAt").GetDateTimeOffset(), entry.GetProperty("updatedAt").GetDateTimeOffset());
-        Assert.Equal(["categories", "products"], routes.EnumerateObject().Select(p => p.Name));
+        Assert.Equal(["categories", "products", "blogPosts", "blogCategories", "pages"], routes.EnumerateObject().Select(p => p.Name));
     }
 }

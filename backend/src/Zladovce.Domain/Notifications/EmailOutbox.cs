@@ -23,6 +23,12 @@ public enum EmailTemplate
 
     /// <summary>Porudžbina otkazana – also used for Rejected, with the rejection message.</summary>
     OrderCancelled,
+
+    /// <summary>Newsletter double opt-in: confirmation link and unsubscribe link (Phase 7).</summary>
+    NewsletterConfirm,
+
+    /// <summary>A contact-form message, sent to the store contact address with Reply-To = the sender (Phase 7).</summary>
+    ContactMessage,
 }
 
 /// <summary>State of an outbox row.</summary>
@@ -73,6 +79,13 @@ public static class EmailDedupKeys
     /// <summary>The <paramref name="sequence"/>-th confirmation resent by an administrator (1, 2, …).</summary>
     public static string ResentConfirmation(Guid orderId, int sequence) =>
         sequence >= 1 ? $"order:{orderId:D}:resend:{sequence}" : throw new ArgumentOutOfRangeException(nameof(sequence));
+
+    /// <summary>One newsletter confirmation request (the subscriber's <c>confirmation_sent_at</c> in Unix milliseconds).</summary>
+    public static string NewsletterConfirm(Guid subscriberId, DateTimeOffset confirmationSentAt) =>
+        $"newsletter:{subscriberId:D}:confirm:{confirmationSentAt.ToUnixTimeMilliseconds()}";
+
+    /// <summary>The email of one contact-form message.</summary>
+    public static string ContactMessage(Guid messageId) => $"contact:{messageId:D}";
 }
 
 /// <summary>
