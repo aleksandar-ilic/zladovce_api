@@ -15,10 +15,10 @@ One set of stacks per environment, named `Zladovce-<Env>-<Part>` (`Dev`, `Stagin
 |---|---|
 | `Network` | VPC (2 AZs, public + private subnets), NAT instance (`t4g.nano`) or NAT gateway, S3 gateway endpoint, all security groups |
 | `Database` | RDS PostgreSQL 17 (`db.t4g.micro`, 20 GB gp3, encrypted, private, single-AZ, IAM authentication, RDS-managed master secret), optional RDS Proxy |
-| `Auth` | Cognito user pool for administrators (no self sign-up, groups `Owner` / `Staff`, optional TOTP), public SPA client |
+| `Auth` | Cognito user pool for administrators (no self sign-up, e-mail is the user name, groups `Owner` / `Staff`, optional TOTP, Serbian invitation e-mail), public SPA client |
 | `Media` | Private S3 bucket (`uploads/`, `media/`) + CloudFront with Origin Access Control serving `media/*` only; image processor Lambda (S3 trigger on `uploads/`, outside the VPC) with its SQS dead-letter queue |
 | `Migrations` | Migration runner Lambda (pipeline only, not behind API Gateway) |
-| `Notifications` | Tracking-code key secret (Secrets Manager); SES domain identity (prod only), SES configuration set with a CloudWatch event destination (staging, prod) |
+| `Notifications` | Tracking-code key secret and storefront rebuild-webhook secret (Secrets Manager); SES domain identity (prod only), SES configuration set with a CloudWatch event destination (staging, prod) |
 | `Api` | API Lambda (ASP.NET Core, .NET 10, arm64) with alias `live`, HTTP API with JWT authorizer on `/api/v1/admin/*` and per-route throttling on tracking lookup and checkout; e-mail outbox worker Lambda with its EventBridge schedule (every minute) |
 | `Observability` | SNS alarm topic, CloudWatch alarms (API 5xx / p95 latency, Lambda errors / throttles, image processor errors / dead-lettered uploads, outbox worker errors / throttles / duration / not running, dead e-mails, SES bounce / complaint rate (prod), RDS CPU / storage / connections, NAT status check); the account's AWS Budget (prod) |
 | `Frontend` | Amplify Hosting apps (storefront, admin) built from the separate frontend repository. Only when `amplify.enabled` is `true` |
@@ -129,6 +129,8 @@ Everything is in [`lib/config.ts`](lib/config.ts). Nothing there is a secret.
 | `email.replyToAddress`, `email.logoUrl` | – | not set (store contact e-mail / no logo) | not set |
 | `email.sandboxRecipients` | – | `[]` | `[]` |
 | Tracking-key secret on stack deletion | deleted | deleted | retained |
+| `auth.adminUrl` (link in the Cognito invitation) | `http://localhost:4201` | `https://admin-staging.zladovce.com` | `https://admin.zladovce.com` |
+| Rebuild-webhook secret on stack deletion (`site.retainRebuildWebhookSecretOnDelete`) | deleted | deleted | retained |
 | Outbox worker (`outboxWorker.*`) | 512 MB, 90 s, batch = backend default (50), reserved concurrency 1 | same | same |
 | Route throttling (`api.routeThrottling`) | lookup 10 / 20, checkout 5 / 10 (rate / burst) | same | same |
 | SES reputation alarms (`observability.sesReputationAlarms`) | no | no | yes (account-wide) |
@@ -199,6 +201,8 @@ Storefront__BaseUrl  Tracking__TokenEncryptionKeySecretArn  Email__Dispatcher__R
 Email__Enabled (true|false)  Email__Provider=Ses  Email__Ses__Region
 Email__FromAddress  Email__Ses__ConfigurationSetName        (when the environment has them)
 Email__FromName  Email__ReplyToAddress  Email__LogoUrl  Email__Dispatcher__BatchSize   (only when configured)
+Media__BaseUrl (same https CloudFront / media-domain URL as the API, no trailing slash: store logo in e-mails)
+Site__RebuildWebhookUrlSecretArn (storefront build hook, Phase 7)
 ```
 
 EventBridge rule `zladovce-<env>-outbox-worker`, `rate(1 minute)`, input ignored, no retries (EventBridge retry policy 0,
@@ -225,6 +229,8 @@ IAM:
 | Image processor | `s3:GetObject` + `s3:DeleteObject` on `uploads/*`; `s3:PutObject` + `s3:GetObject` on `media/*`; `s3:ListBucket` on the media bucket; `sqs:SendMessage` (+ `GetQueueAttributes`, `GetQueueUrl`, added by CDK) on its dead-letter queue. No VPC, database or secrets permissions |
 | Migration runner | `rds-db:connect` as `zladovce_migrator`; `secretsmanager:GetSecretValue` on the RDS-managed master secret while `database.migrationRunnerCanReadMasterSecret` is on |
 | API (Phase 6 addition) | `secretsmanager:GetSecretValue` on the environment's tracking-key secret only |
+| API (Phase 7 addition) | `cognito-idp:AdminCreateUser`, `AdminAddUserToGroup`, `AdminRemoveUserFromGroup`, `AdminDisableUser`, `AdminEnableUser`, `AdminGetUser` on the ARN of the environment's own user pool only (no wildcard; the pools of the other environments in the shared account are out of reach) |
+| Outbox worker (Phase 7 addition) | `secretsmanager:GetSecretValue` on the environment's rebuild-webhook secret only (no other role can read it). No Cognito permission |
 | Outbox worker | `rds-db:connect` as `zladovce_app`; `secretsmanager:GetSecretValue` on the tracking-key secret; `ses:SendEmail` on the SES identity ARN and the environment's configuration set ARN (plus verified sandbox recipient identities, if configured), with condition `ses:FromAddress` = the environment's sender address. No SES permission at all while `email.enabled` is false. No S3 |
 
 `s3:ListBucket` is what makes S3 answer **404 instead of 403** for a missing object (the manifest of an image that is
@@ -341,6 +347,86 @@ or backlog-size alarm (docs/AWS_INFRASTRUCTURE.md W8 lists one), and rows marked
 their last attempt are only in the run summary line (`… {Dead} dead, {Expired} expired.`), not counted by the metric
 filter. The admin e-mail list (status `Dead`/`Pending`) is the source of truth.
 
+## Analytics and CMS (Phase 7)
+
+Dashboard, reports, expenses, blog, CMS pages, FAQ, testimonials, newsletter, contact form and the audit log need no
+infrastructure of their own (database tables and API routes only). Three things do:
+
+### Administrators (Cognito)
+
+The Owner invites administrators from the admin application (`POST /api/v1/admin/users`): the API calls
+`AdminCreateUser` (Cognito e-mails a temporary password) and `AdminAddUserToGroup`; role changes and deactivation use
+`AdminAddUserToGroup` / `AdminRemoveUserFromGroup` / `AdminDisableUser` / `AdminEnableUser` (+ `AdminGetUser`). The API
+role has exactly these six actions on its own pool's ARN (`Auth__Cognito__UserPoolId` / `Region` are already in its
+environment). The API is in the VPC and reaches Cognito through the NAT (HTTPS), as for the first-sign-in `GetUser`.
+
+User pool (unchanged sign-in): the e-mail address is the **user name** (`UsernameAttributes: [email]`, case-insensitive,
+no aliases), which the backend's `AdminCreateUser(Username = email)` relies on; groups `Owner` and `Staff`.
+
+Invitation e-mail (`AdminCreateUserConfig.InviteMessageTemplate`, `invitationMessage()` in `lib/stacks/auth-stack.ts`):
+Serbian (Latin), subject "Pozivnica za administraciju prodavnice Zladovce" (plus `(dev)` / `(staging)` outside prod), HTML
+body with the admin URL (`auth.adminUrl`), the user name (`{username}`) and the temporary password (`{####}`), valid
+3 days. An expired invitation is re-sent with
+`aws cognito-idp admin-create-user --user-pool-id <UserPoolId> --username <email> --message-action RESEND`
+(the backend has no "resend" endpoint).
+
+**Sender and daily limit.** Cognito sends with its built-in sender (`COGNITO_DEFAULT`, from
+`no-reply@verificationemail.com`). That sender has a low daily quota per AWS account and region (50 e-mails per day
+according to the Cognito quotas page – check the current value), and **all three environments share it** because they
+share one account. It is enough for a handful of invitations and password resets; it is not a channel for anything
+else. Switching to SES (`email: UserPoolEmail.withSES(...)`, sender on `zladovce.com`) is a small change but requires a
+**verified** SES identity at deploy time, so it would make the Auth stack depend on the DNS records being in place; it
+is left for when the domain identity is verified (then also check the SES sandbox: Cognito e-mails count against SES).
+
+### Storefront rebuild webhook (A14)
+
+After a change of prerendered content (categories, products, settings, blog, CMS pages, FAQ, testimonials, or a
+scheduled post becoming public) the outbox worker POSTs to the storefront's build hook, at most every 5 minutes
+(backend `Site:*`). The URL is a secret (it carries a token):
+
+- Secret `zladovce/<env>/site-rebuild-webhook-url` (stack `Notifications`, output `SiteRebuildWebhookSecretName`), value
+  the https URL or `{"url":"https://…"}`. Only the outbox worker may read it; it gets `Site__RebuildWebhookUrlSecretArn`.
+- **Placeholder.** CloudFormation creates it as `{"status":"NOT-CONFIGURED","filler":"<random>"}`. The backend
+  (`SiteRebuildDispatcher.ParseSecret`) reads only a plain URL or the JSON member `url`, so this value yields *no URL*:
+  the run reports `siteRebuild: NotConfigured`, **nothing is POSTed**, and the rebuild request stays pending (it is sent
+  once a URL exists). A value without URL is not cached, so the worker re-reads the secret every minute (≈ 43 000
+  `GetSecretValue` calls / month ≈ 0.22 USD per environment while it is a placeholder). Anything that is not https
+  (e.g. `http://…`, a typo) is also ignored – no call is made.
+- **Why it is not created by CDK.** CloudFormation has no Amplify webhook resource (`AWS::Amplify::App`, `Branch`,
+  `Domain` only); creating it would need a custom resource (Lambda + role + cdk-nag exceptions). The hook is created
+  once per environment by hand (below). With `amplify.enabled` the `Frontend` stack prints the exact command
+  (output `StorefrontRebuildWebhookCommand`).
+- **Caching.** Once the worker has read a URL it keeps it for the life of the Lambda instance. After *replacing* a URL,
+  the old one may be used until the instances are recycled (or the next deployment of the worker).
+- Never change `generateSecretString` of this secret in `NotificationsStack` (CloudFormation would overwrite the stored
+  URL with a new placeholder). No automatic rotation (cdk-nag SMG4 acknowledged): to replace the hook, create a new one,
+  `put-secret-value`, then delete the old one (`aws amplify delete-webhook`).
+- `deploy.yml` **warns** (never fails) while the secret is still the placeholder or not an https URL.
+
+Setting it (once per environment, after the storefront Amplify app and branch exist):
+
+```
+APP_ID=$(aws cloudformation describe-stacks --stack-name Zladovce-<Env>-Frontend \
+  --query "Stacks[0].Outputs[?OutputKey=='StorefrontAppId'].OutputValue" --output text)
+URL=$(aws amplify create-webhook --app-id "$APP_ID" --branch-name <amplify.branch> \
+  --description zladovce-<env>-content-rebuild --query webhook.webhookUrl --output text)
+aws secretsmanager put-secret-value --secret-id zladovce/<env>/site-rebuild-webhook-url --secret-string "$URL"
+unset URL
+```
+
+(If the storefront is hosted elsewhere, store that host's build hook URL the same way.)
+
+### Images, logo in e-mails, rate limits
+
+- New upload purposes `blog`, `page`, `logo` use `uploads/blog/`, `uploads/page/`, `uploads/logo/`. The S3 notification is a
+  plain prefix filter on `uploads/` (no suffix rule), the API may presign `uploads/*` and the image processor reads and
+  deletes `uploads/*`, so they are processed like product images (renditions under `media/blog|pages|logos/…`); a test
+  checks the prefix match.
+- The outbox worker gets `Media__BaseUrl` (the https CloudFront or media-domain URL): e-mails then show the store logo's
+  `email.png` rendition; `email.logoUrl` stays the fallback.
+- The optional rate-limit settings of the backend (`RateLimiting__Policies__ContactForm|NewsletterSignup|NewsletterToken__*`)
+  are not set: the backend defaults apply. The gateway's stage throttling covers these routes too.
+
 ## Cost switches
 
 | Switch | Default | Effect | Approx. cost |
@@ -358,6 +444,10 @@ environment) plus API calls (the key is cached per Lambda instance); SES 0.10 US
 no VDM); EventBridge scheduled rules are free; the worker runs 43 200 times a month (512 MB, typically well under a
 second when nothing is due – within or near the Lambda free tier); a few more alarms (0.10 USD each) and one metric
 filter; AWS Budgets: the first two budgets of an account are free.
+
+Phase 7 cost impact: one more secret per environment (0.40 USD / month) plus its reads (≈ 0.22 USD / month while it is
+the placeholder, see "Storefront rebuild webhook"; negligible once a URL is cached); Cognito invitations through the
+built-in sender are free; each storefront rebuild is an Amplify build (build minutes are billed by Amplify).
 
 NAT instance notes: it runs Amazon Linux 2023 from the "latest" public SSM parameter, so a deployment
 after a new AMI release **replaces the instance** (a short outbound outage; e-mails wait in the outbox).
@@ -395,8 +485,19 @@ Nothing below has been executed yet.
    5. `curl <ApiUrl>/health`, and invoke the worker once:
       `aws lambda invoke --function-name zladovce-<env>-outbox-worker --payload '{}' --cli-binary-format raw-in-base64-out worker.json`
       (`deploy.yml` does both).
-6. **First administrator.** Create the first user in the Cognito pool (console or CLI) and add it to
-   the `Owner` group; self sign-up is disabled.
+6. **First administrator (Owner).** Nobody can invite anyone before an Owner exists, and self sign-up is disabled, so
+   the first Owner is created with the CLI (once per environment; `UserPoolId` is an output of `Zladovce-<Env>-Auth`):
+   ```
+   aws cognito-idp admin-create-user --user-pool-id <UserPoolId> --username owner@example.com \
+     --user-attributes Name=email,Value=owner@example.com Name=email_verified,Value=true Name=name,Value="Ime Prezime" \
+     --desired-delivery-mediums EMAIL
+   aws cognito-idp admin-add-user-to-group --user-pool-id <UserPoolId> --username owner@example.com --group-name Owner
+   ```
+   Cognito sends the Serbian invitation (temporary password, valid 3 days). Add the group **before** the first sign-in:
+   the role comes from the token's `cognito:groups`, and a token without a group gets `403` (if it happened, sign out
+   and in again). There is nothing to insert in the database: on the first valid sign-in the backend creates the
+   `admin_users` row itself (auto-provisioning, `Auth.Login` audit entry). Every further administrator is invited by the
+   Owner from the admin application.
 7. **Alarm e-mail.** Set `observability.alarmEmail` and confirm the subscription e-mail from SNS. The prod alarm topic
    also receives the AWS Budget alerts (optionally add `budget.notificationEmails`; check `budget.monthlyLimitUsd`).
 8. **Frontend values.** The frontend needs only public values, all stack outputs: `ApiUrl`,
@@ -426,12 +527,18 @@ Nothing below has been executed yet.
        order e-mails, expected volume, how bounces/complaints are handled: account suppression list + alarms). It
        applies to the whole account. Then empty `email.sandboxRecipients`.
     5. `email.logoUrl` (optional): an https URL of the logo, e.g. on the media domain.
-11. **Still to come (later phases):** Cognito e-mail through SES; custom domains and DNS records.
-12. **CI/CD.** `.github/workflows/deploy.yml` needs a GitHub OIDC provider and deploy role in the
+11. **Storefront rebuild webhook (Phase 7)**, once per environment after the storefront Amplify app exists: create the
+    build hook and store its URL in `zladovce/<env>/site-rebuild-webhook-url` (commands in "Storefront rebuild webhook"
+    above; with `amplify.enabled` the `Frontend` output `StorefrontRebuildWebhookCommand` has the exact
+    `create-webhook` call). Until then nothing is called and content changes simply wait; `deploy.yml` warns.
+12. **Still to come (later phases):** Cognito e-mail through SES; custom domains and DNS records.
+13. **CI/CD.** `.github/workflows/deploy.yml` needs a GitHub OIDC provider and deploy role in the
     account, and GitHub environments `staging` / `production` (with required reviewers) holding the
     variable `AWS_DEPLOY_ROLE_ARN`. Besides assuming the CDK bootstrap roles, the deploy role needs
     `lambda:InvokeFunction` on the migration runner and the outbox worker and `secretsmanager:GetSecretValue` +
-    `PutSecretValue` on `zladovce/<env>/tracking-token-key-*` of the environments it deploys. The workflow is **untested**.
+    `PutSecretValue` on `zladovce/<env>/tracking-token-key-*` of the environments it deploys, and (optional, for the
+    rebuild-webhook warning) `secretsmanager:GetSecretValue` on `zladovce/<env>/site-rebuild-webhook-url-*`. The workflow
+    is **untested**.
 
 ## Rollback
 
@@ -463,8 +570,9 @@ CloudFront certificate while no custom domain is configured, public API routes, 
 (unencrypted root volume, no detailed monitoring, no termination protection), VPC flow logs off
 outside production, the AWS managed `AWSLambdaBasicExecutionRole` of the CDK-owned bucket-notifications
 handler (and of the auto-delete handler in dev), the image processor dead-letter queue having no dead-letter
-queue of its own (SQS3), no automatic rotation of the tracking-code key (SMG4, see "Tracking-code key"), and the IAM
-wildcards listed below.
+queue of its own (SQS3), no automatic rotation of the tracking-code key (SMG4, see "Tracking-code key") and of the
+rebuild-webhook secret (SMG4, an Amplify build hook cannot be rotated by Secrets Manager), and the IAM wildcards listed
+below.
 
 IAM wildcards (all acknowledged):
 
@@ -474,7 +582,8 @@ IAM wildcards (all acknowledged):
   image processor, outbox worker).
 
 No new wildcard in Phase 6: `ses:SendEmail` names the identity and configuration set ARNs, and the tracking key is
-granted by its full secret ARN.
+granted by its full secret ARN. No new wildcard in Phase 7: the six Cognito actions are listed one by one on the user
+pool ARN, and the rebuild-webhook secret is granted by its full ARN.
 - `<bucket>/uploads/*` and `<bucket>/media/*` – object prefixes (API and image processor).
 
 The bucket-notifications handler's own policy is `s3:PutBucketNotification` on the media bucket only.
@@ -483,7 +592,8 @@ The bucket-notifications handler's own policy is `s3:PutBucketNotification` on t
 
 Later phases add these; the code has extension points (comments in the stacks) but no stubs:
 
-- Cognito administration permissions for the API (inviting administrators); Cognito e-mail through SES.
+- Cognito e-mail through SES (see "Administrators (Cognito)").
+- The Amplify build hook as code (no CloudFormation resource; created by hand, see "Storefront rebuild webhook").
 - An outbox backlog alarm (needs a metric the backend does not publish yet).
 - Custom domains for the Amplify apps, certificates and DNS records (including Route 53 for the SES records).
 - Lambda cold-start optimisation (SnapStart / ReadyToRun) – to be evaluated.

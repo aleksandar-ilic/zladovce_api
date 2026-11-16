@@ -36,7 +36,7 @@ export interface ZladovceEnvironment {
  *   Network  <- Database <- Api <- Observability
  *   Auth     <------------- Api <- Frontend (optional)
  *   Media    <------------- Api
- *   Notifications <-------- Api (tracking-key secret, SES identity / configuration set)
+ *   Notifications <-------- Api (tracking-key and rebuild-webhook secrets, SES identity / configuration set)
  *   Media    <------------------- Observability (image processor function and dead-letter queue)
  *
  * so there are no cyclic cross-stack references. The image processor and its S3 trigger are inside
@@ -97,7 +97,7 @@ export function createZladovceEnvironment(
 
   const notifications = new NotificationsStack(app, stackName('Notifications'), {
     ...common,
-    description: `Zladovce ${config.envName}: tracking-code key secret, SES identity and configuration set`,
+    description: `Zladovce ${config.envName}: tracking-code key and rebuild-webhook secrets, SES identity and configuration set`,
     config,
   });
 
@@ -110,6 +110,7 @@ export function createZladovceEnvironment(
     lambdaSecurityGroup: network.lambdaSecurityGroup,
     database,
     userPoolId: auth.userPool.userPoolId,
+    userPoolArn: auth.userPool.userPoolArn,
     userPoolClientId: auth.adminClient.userPoolClientId,
     jwtIssuerUrl: auth.issuerUrl,
     mediaBucket: media.bucket,

@@ -9,6 +9,39 @@ export interface AuthStackProps extends StackProps {
 
 export const ADMIN_GROUPS = ['Owner', 'Staff'] as const;
 
+/** Lifetime of the temporary password in an invitation (Cognito: 0-365 days). */
+export const TEMPORARY_PASSWORD_VALIDITY_DAYS = 3;
+
+export interface InvitationMessage {
+  readonly subject: string;
+  /** HTML; contains Cognito's placeholders `{username}` and `{####}` (temporary password). */
+  readonly body: string;
+}
+
+/**
+ * Serbian invitation e-mail Cognito sends on AdminCreateUser (the backend's "invite administrator" and the CLI command
+ * that creates the first Owner). Cognito replaces `{username}` with the user name (here: the e-mail address, which is
+ * the pool's username attribute) and `{####}` with the temporary password; both placeholders are mandatory.
+ * `config.auth.adminUrl` is validated (no quotes / angle brackets), so it can be inserted into the HTML as is.
+ */
+export function invitationMessage(config: EnvironmentConfig): InvitationMessage {
+  const adminUrl = config.auth.adminUrl;
+  const environmentSuffix = config.isProduction ? '' : ` (${config.envName})`;
+  const body = [
+    '<p>Zdravo,</p>',
+    `<p>dobili ste pristup administraciji prodavnice Zladovce${environmentSuffix}.</p>`,
+    '<p>',
+    `Adresa administracije: <a href="${adminUrl}">${adminUrl}</a><br>`,
+    'Korisničko ime (vaša e-adresa): {username}<br>',
+    'Privremena lozinka: <b>{####}</b>',
+    '</p>',
+    `<p>Pri prvoj prijavi biće zatraženo da postavite novu lozinku. Privremena lozinka važi ${TEMPORARY_PASSWORD_VALIDITY_DAYS} dana; ` +
+      'ako istekne, obratite se vlasniku prodavnice za novu pozivnicu.</p>',
+    '<p>Ako niste očekivali ovu poruku, slobodno je zanemarite.</p>',
+  ].join('\n');
+  return { subject: `Pozivnica za administraciju prodavnice Zladovce${environmentSuffix}`, body };
+}
+
 /**
  * Cognito user pool for administrators only. Customers are guests and never
  * authenticate. Admins are invited (no self sign-up) and sign in with e-mail
@@ -24,10 +57,13 @@ export class AuthStack extends Stack {
     super(scope, id, props);
     const { config } = props;
     const auth = config.auth;
+    const invitation = invitationMessage(config);
 
     this.userPool = new cognito.UserPool(this, 'AdminUserPool', {
       userPoolName: `${resourcePrefix(config)}-admins`,
       selfSignUpEnabled: false,
+      // E-mail only (no `username` alias) => the e-mail address IS the user name (UsernameAttributes: [email]). The
+      // backend's AdminCreateUser passes the e-mail as Username, which this requires.
       signInAliases: { email: true },
       signInCaseSensitive: false,
       autoVerify: { email: true },
@@ -40,15 +76,21 @@ export class AuthStack extends Stack {
         requireUppercase: true,
         requireDigits: true,
         requireSymbols: true,
-        tempPasswordValidity: Duration.days(3),
+        tempPasswordValidity: Duration.days(TEMPORARY_PASSWORD_VALIDITY_DAYS),
       },
       mfa: cognito.Mfa.OPTIONAL,
       mfaSecondFactor: { otp: true, sms: false },
       accountRecovery: cognito.AccountRecovery.EMAIL_ONLY,
       deletionProtection: auth.retainOnDelete,
       removalPolicy: auth.retainOnDelete ? RemovalPolicy.RETAIN : RemovalPolicy.DESTROY,
-      // E-mail is sent by Cognito's built-in sender for now. Switching to SES
-      // (`email: cognito.UserPoolEmail.withSES(...)`) belongs to the phase that adds the SES identity.
+      // Invitation e-mail (AdminCreateUser with DesiredDeliveryMediums EMAIL), in Serbian, with the admin URL.
+      userInvitation: {
+        emailSubject: invitation.subject,
+        emailBody: invitation.body,
+      },
+      // E-mail is sent by Cognito's built-in sender (COGNITO_DEFAULT, no-reply@verificationemail.com, a small daily
+      // quota per account - see README). Switching to SES (`email: cognito.UserPoolEmail.withSES(...)`) needs a
+      // VERIFIED identity at deploy time, which would make the first deployment depend on the DNS records.
     });
 
     for (const groupName of ADMIN_GROUPS) {

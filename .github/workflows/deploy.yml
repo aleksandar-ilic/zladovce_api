@@ -21,6 +21,10 @@
 #     arn:aws:secretsmanager:<region>:<account>:secret:zladovce/<env>/tracking-token-key-*) and invoke
 #     the outbox worker (lambda:InvokeFunction on zladovce-<env>-outbox-worker), see step 2 and the
 #     smoke tests.
+#   - Optional (Phase 7): secretsmanager:GetSecretValue on
+#     arn:aws:secretsmanager:<region>:<account>:secret:zladovce/<env>/site-rebuild-webhook-url-*, so that the
+#     "Check the storefront rebuild webhook" step can warn while it is still the placeholder. Without the
+#     permission that step only warns that it could not check; it never fails the deployment.
 #   - Staging sends e-mail through the SES domain identity owned by prod (one shared account):
 #     deploy Zladovce-Prod-Notifications once before staging can send (see infrastructure/README.md).
 #
@@ -166,6 +170,52 @@ jobs:
             exit 1
           fi
           echo "Tracking key of $SECRET_ID is valid."
+
+      # Step 2b (Phase 7): the storefront rebuild webhook. Created by CloudFormation with a placeholder
+      # ({"status":"NOT-CONFIGURED",...}, no "url"), which the backend treats as "not configured": the
+      # outbox worker calls nothing and content changes wait (pending) until a URL is stored. This is a
+      # WARNING only - a shop without a build hook still works, its storefront is just not rebuilt
+      # automatically. The URL is a secret and is never printed. Fix: README "Storefront rebuild webhook".
+      - name: Check the storefront rebuild webhook (warning only)
+        working-directory: infrastructure
+        continue-on-error: true
+        run: |
+          set -uo pipefail
+          STACK="${STACK_PREFIX}-Notifications"
+          SECRET_ID=$(jq -r --arg stack "$STACK" '.[$stack].SiteRebuildWebhookSecretName // empty' outputs-notifications.json)
+          if [ -z "$SECRET_ID" ]; then
+            echo "::warning::No SiteRebuildWebhookSecretName output; cannot check the rebuild webhook."
+            exit 0
+          fi
+          if ! VALUE=$(aws secretsmanager get-secret-value --secret-id "$SECRET_ID" --query SecretString --output text 2>/dev/null); then
+            echo "::warning::Could not read $SECRET_ID (deploy role lacks secretsmanager:GetSecretValue on it?); rebuild webhook not checked."
+            exit 0
+          fi
+          # Same rules as the backend (SiteRebuildDispatcher): plain URL or {"url": "..."}; https only
+          # (plain http only for loopback, which makes no sense here). Exit 0 = usable, 2 = placeholder, 1 = invalid.
+          status=0
+          printf '%s' "$VALUE" | python3 -c '
+          import json, sys
+          from urllib.parse import urlparse
+          value = sys.stdin.read().strip()
+          if value.startswith("{"):
+              try:
+                  document = json.loads(value)
+              except ValueError:
+                  sys.exit(1)
+              if "url" not in document:
+                  sys.exit(2 if document.get("status") == "NOT-CONFIGURED" else 1)
+              value = str(document.get("url") or "").strip()
+          url = urlparse(value)
+          sys.exit(0 if url.scheme == "https" and url.netloc else 1)
+          ' || status=$?
+          unset VALUE
+          case "$status" in
+            0) echo "Storefront rebuild webhook in $SECRET_ID is set (https URL)." ;;
+            2) echo "::warning::$SECRET_ID still holds the placeholder: content changes will NOT rebuild the storefront. Create the Amplify build hook and store it (infrastructure/README.md, 'Storefront rebuild webhook')." ;;
+            *) echo "::warning::$SECRET_ID is not an https URL (or {\"url\":\"https://...\"}): the outbox worker ignores it and calls nothing." ;;
+          esac
+          exit 0
 
       # Step 3: everything the migration runner needs (network, database) and the runner itself.
       # The API stack is NOT deployed yet, so the running API version is untouched.

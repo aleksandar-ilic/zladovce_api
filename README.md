@@ -1,4 +1,4 @@
-﻿# Zladovce
+# Zladovce
 
 Production-ready e-commerce platform for Zladovce, a family-owned business from southern Serbia selling homemade and natural products (jams, juices, vinegar, compotes, fruit products).
 
@@ -41,7 +41,9 @@ Phase 1 – Discovery and Architecture: documentation drafted, awaiting review. 
 
 Phase 2 – Foundation: built and tested locally (backend 179 tests, frontend 198 tests, infrastructure 81 tests, all passing as of 2026-11-14). Nothing is deployed to AWS; Cognito sign-in, RDS IAM authentication, Lambda hosting and the GitHub workflows are untested against real services.
 
-Phase 3 – Catalog and Administration: backend done (categories, products, variants, images, inventory; 415 backend tests passing). Admin screens in progress in zladovce_web. Infrastructure for the image processor is not added yet.
+Phases 3–7 – Catalog, Storefront, Checkout and Orders, Tracking and Notifications, Analytics and CMS: built and tested locally (as of 2026-11-17: backend 887 tests, frontend 508 tests, infrastructure 134 tests, all passing). Nothing is deployed to AWS.
+
+Phase 8 – Production Readiness: not started.
 
 The business questions in [IMPLEMENTATION_PLAN](docs/IMPLEMENTATION_PLAN.md#r4-open-questions-for-the-business) are still open; work proceeds on the assumptions in section R3.
 

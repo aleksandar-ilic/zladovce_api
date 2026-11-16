@@ -4,7 +4,7 @@ import { CfnOutput, SecretValue, Stack, StackProps } from 'aws-cdk-lib';
 import * as amplify from 'aws-cdk-lib/aws-amplify';
 import { Construct } from 'constructs';
 import { INFRA_ROOT } from '../artifacts';
-import { EnvironmentConfig, resourcePrefix } from '../config';
+import { EnvironmentConfig, resourcePrefix, siteRebuildWebhookSecretName } from '../config';
 
 export interface FrontendStackProps extends StackProps {
   readonly config: EnvironmentConfig;
@@ -168,6 +168,14 @@ export class FrontendStack extends Stack {
     new CfnOutput(this, 'StorefrontUrl', {
       value: `https://${storefrontBranch.attrBranchName}.${this.storefrontApp.attrDefaultDomain}`,
       description: 'Add this origin to cors.storefrontOrigins if no custom domain is used',
+    });
+    // CloudFormation has no Amplify webhook resource: the build hook the outbox worker calls after content changes is
+    // created once by hand and stored in the rebuild-webhook secret (Notifications stack, README "Storefront rebuild").
+    new CfnOutput(this, 'StorefrontRebuildWebhookCommand', {
+      value:
+        `aws amplify create-webhook --app-id ${this.storefrontApp.attrAppId} --branch-name ${storefrontBranch.attrBranchName} ` +
+        `--description zladovce-${config.envName}-content-rebuild --query webhook.webhookUrl --output text`,
+      description: `Create the storefront build hook once, then store its URL in ${siteRebuildWebhookSecretName(config)} (README)`,
     });
     new CfnOutput(this, 'AdminAppId', { value: this.adminApp.attrAppId });
     new CfnOutput(this, 'AdminUrl', {

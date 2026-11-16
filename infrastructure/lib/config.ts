@@ -77,6 +77,30 @@ export const OUTBOX_DEAD_LOG_TEXT = 'failed; now Dead';
  */
 export const TRACKING_KEY_PLACEHOLDER_MARKER = 'NOT-INITIALISED';
 
+/**
+ * Marker in the initial value of the storefront rebuild-webhook secret (`zladovce/<env>/site-rebuild-webhook-url`).
+ * The Amplify build hook URL does not exist when the stack is created (and CloudFormation has no Amplify webhook
+ * resource), so the secret starts as `{"status":"NOT-CONFIGURED","filler":"<random>"}`. The backend
+ * (SiteRebuildDispatcher.ParseSecret) reads only a plain URL or the JSON member "url"; this value has neither, so it
+ * is treated as "not configured": nothing is POSTed and rebuild requests stay pending. A value without URL is not
+ * cached by the backend, so the real URL is picked up by the next worker run after `put-secret-value`.
+ */
+export const SITE_REBUILD_PLACEHOLDER_MARKER = 'NOT-CONFIGURED';
+
+/**
+ * Cognito actions the API needs to invite and manage administrators
+ * (backend/src/Zladovce.Infrastructure/Identity/CognitoIdentityProvisioning.cs). Granted on the environment's own
+ * user pool ARN only.
+ */
+export const COGNITO_ADMIN_ACTIONS: readonly string[] = [
+  'cognito-idp:AdminCreateUser',
+  'cognito-idp:AdminAddUserToGroup',
+  'cognito-idp:AdminRemoveUserFromGroup',
+  'cognito-idp:AdminDisableUser',
+  'cognito-idp:AdminEnableUser',
+  'cognito-idp:AdminGetUser',
+];
+
 /* -------------------------------------------------------------------------- */
 /* Types                                                                       */
 /* -------------------------------------------------------------------------- */
@@ -151,6 +175,11 @@ export interface AuthConfig {
   readonly accessTokenValidityMinutes: number;
   readonly idTokenValidityMinutes: number;
   readonly refreshTokenValidityHours: number;
+  /**
+   * Public URL of the admin application (no trailing slash), shown in the Cognito invitation e-mail. https, or
+   * http://localhost[:port] (dev, whose admin application runs locally).
+   */
+  readonly adminUrl: string;
 }
 
 export interface MediaConfig {
@@ -227,6 +256,11 @@ export interface StorefrontConfig {
    * Required by the backend outside Development, for the API and for the outbox worker.
    */
   readonly baseUrl: string;
+}
+
+export interface SiteConfig {
+  /** Keep the rebuild-webhook secret (`zladovce/<env>/site-rebuild-webhook-url`) when the stack is deleted. */
+  readonly retainRebuildWebhookSecretOnDelete: boolean;
 }
 
 export interface TrackingConfig {
@@ -354,6 +388,8 @@ export interface EnvironmentConfig {
   readonly amplify: AmplifyConfig;
   readonly storefront: StorefrontConfig;
   readonly tracking: TrackingConfig;
+  /** Storefront rebuild webhook (A14), called by the outbox worker. */
+  readonly site: SiteConfig;
   readonly email: EmailConfig;
   readonly outboxWorker: OutboxWorkerConfig;
   /** Account-level AWS Budget: set in prod only (one account for all environments). */
@@ -395,6 +431,7 @@ const baseAuth: AuthConfig = {
   accessTokenValidityMinutes: 60,
   idTokenValidityMinutes: 60,
   refreshTokenValidityHours: 12,
+  adminUrl: 'http://localhost:4201',
 };
 
 const baseMedia: MediaConfig = {
@@ -480,7 +517,8 @@ const environments: Record<EnvName, EnvironmentConfig> = {
     },
     network: baseNetwork,
     database: baseDatabase,
-    auth: baseAuth,
+    // The dev admin application runs locally (no dev Amplify app yet); invitations link there.
+    auth: { ...baseAuth, adminUrl: 'http://localhost:4201' },
     media: { ...baseMedia, autoDeleteObjects: true },
     api: {
       ...baseApi,
@@ -495,6 +533,7 @@ const environments: Record<EnvName, EnvironmentConfig> = {
     // so the value only ends up in outbox payloads. Replace with the dev Amplify URL once it exists.
     storefront: { baseUrl: 'https://dev.zladovce.com' },
     tracking: { retainKeyOnDelete: false },
+    site: { retainRebuildWebhookSecretOnDelete: false },
     // No SES identity in dev: the worker runs with Email__Enabled=false (rows stay Pending, rate limits are purged).
     email: { enabled: false, identity: { mode: 'none' }, sandboxRecipients: [] },
     outboxWorker: baseOutboxWorker,
@@ -515,13 +554,14 @@ const environments: Record<EnvName, EnvironmentConfig> = {
     },
     network: baseNetwork,
     database: { ...baseDatabase, backupRetentionDays: 1, removalPolicy: 'snapshot' },
-    auth: baseAuth,
+    auth: { ...baseAuth, adminUrl: 'https://admin-staging.zladovce.com' },
     media: baseMedia,
     api: { ...baseApi, aspnetEnvironment: 'Staging', logRetentionDays: 30 },
     observability: baseObservability,
     amplify: { ...baseAmplify, branch: 'main' },
     storefront: { baseUrl: 'https://staging.zladovce.com' },
     tracking: { retainKeyOnDelete: false },
+    site: { retainRebuildWebhookSecretOnDelete: false },
     email: {
       enabled: true,
       // Owned by prod (deploy Zladovce-Prod-Notifications first); staging only references it by name.
@@ -556,13 +596,14 @@ const environments: Record<EnvName, EnvironmentConfig> = {
       deletionProtection: true,
       removalPolicy: 'snapshot',
     },
-    auth: { ...baseAuth, retainOnDelete: true },
+    auth: { ...baseAuth, retainOnDelete: true, adminUrl: 'https://admin.zladovce.com' },
     media: { ...baseMedia, retainOnDelete: true },
     api: { ...baseApi, aspnetEnvironment: 'Production', logRetentionDays: 90 },
     observability: { ...baseObservability, sesReputationAlarms: true },
     amplify: { ...baseAmplify, branch: 'production', cspReportOnly: true },
     storefront: { baseUrl: 'https://zladovce.com' },
     tracking: { retainKeyOnDelete: true },
+    site: { retainRebuildWebhookSecretOnDelete: true },
     email: {
       enabled: true,
       identity: {
@@ -752,11 +793,18 @@ export function validateConfig(config: EnvironmentConfig): void {
 
 const HTTPS_URL = /^https:\/\/[^/?#\s]+(\/[^?#\s]*)?$/;
 const EMAIL_ADDRESS = /^[^@\s]+@([^@\s]+\.[^@\s]+)$/;
+/** Admin URL: it is inserted into an HTML e-mail, so no quotes / angle brackets; no trailing slash, query or fragment. */
+const ADMIN_URL = /^(https:\/\/[^/?#\s"'<>]+(\/[^?#\s"'<>]*[^/?#\s"'<>])?|http:\/\/localhost(:\d+)?)$/;
 const DOMAIN_NAME = /^(?!-)[a-z0-9-]+(\.[a-z0-9-]+)+$/;
 
 /** The domain of the SES identity, or undefined for `mode: 'none'`. */
 export function emailIdentityDomain(config: EnvironmentConfig): string | undefined {
   return config.email.identity.mode === 'none' ? undefined : config.email.identity.domain;
+}
+
+/** Secrets Manager name of the storefront rebuild-webhook URL, e.g. `zladovce/dev/site-rebuild-webhook-url`. */
+export function siteRebuildWebhookSecretName(config: EnvironmentConfig): string {
+  return `zladovce/${config.envName}/site-rebuild-webhook-url`;
 }
 
 /** Name of the environment's SES configuration set (exists whenever the environment has an identity). */
@@ -767,6 +815,13 @@ export function configurationSetName(config: EnvironmentConfig): string | undefi
 function validateNotifications(config: EnvironmentConfig): string[] {
   const errors: string[] = [];
   const { storefront, email, outboxWorker, budget, api } = config;
+
+  if (!ADMIN_URL.test(config.auth.adminUrl)) {
+    errors.push(
+      `auth.adminUrl '${config.auth.adminUrl}' must be an https URL (or http://localhost[:port]) without trailing slash, ` +
+        'query, fragment, quotes or angle brackets.',
+    );
+  }
 
   if (!HTTPS_URL.test(storefront.baseUrl) || storefront.baseUrl.endsWith('/')) {
     errors.push(`storefront.baseUrl '${storefront.baseUrl}' must be an absolute https URL without trailing slash, query or fragment.`);

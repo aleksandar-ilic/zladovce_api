@@ -8,6 +8,8 @@ import {
   emailIdentityDomain,
   EnvironmentConfig,
   resourcePrefix,
+  SITE_REBUILD_PLACEHOLDER_MARKER,
+  siteRebuildWebhookSecretName,
   TRACKING_KEY_PLACEHOLDER_MARKER,
 } from '../config';
 
@@ -22,6 +24,7 @@ export const SES_CONFIGURATION_SET_DIMENSION = 'ses:configuration-set';
  * Everything the API and the outbox worker need for tracking codes and e-mail that is not code:
  *
  *  - the tracking-key secret (AES-256-GCM key that encrypts plain tracking codes inside outbox rows),
+ *  - the storefront rebuild-webhook secret (Amplify build hook URL the outbox worker POSTs to, Phase 7 / A14),
  *  - the SES domain identity (only in the environment that owns it, see `SesIdentityConfig`),
  *  - the environment's SES configuration set with reputation metrics, account suppression of bounces/complaints and a
  *    CloudWatch event destination (per-environment Send / Delivery / Bounce / Complaint / Reject metrics).
@@ -33,6 +36,10 @@ export class NotificationsStack extends Stack {
   public readonly trackingKeySecret: secretsmanager.Secret;
   /** Literal (non-token) secret name, e.g. `zladovce/dev/tracking-token-key`. */
   public readonly trackingKeySecretName: string;
+  /** Amplify build hook URL of the storefront (placeholder until set by hand, see README). */
+  public readonly siteRebuildWebhookSecret: secretsmanager.Secret;
+  /** Literal (non-token) secret name, e.g. `zladovce/dev/site-rebuild-webhook-url`. */
+  public readonly siteRebuildWebhookSecretName: string;
   /** Set when the environment has an SES identity (created or imported). */
   public readonly emailIdentity?: ses.IEmailIdentity;
   /** ARN of the identity, built from literals (no cross-stack export). */
@@ -78,6 +85,35 @@ export class NotificationsStack extends Stack {
       description: 'Secret with the tracking-code key; must hold base64 of 32 random bytes before the API is deployed',
     });
     new CfnOutput(this, 'TrackingKeySecretArn', { value: this.trackingKeySecret.secretArn });
+
+    /* ------------------------- Storefront rebuild webhook ------------------------- */
+
+    // The outbox worker POSTs to this URL (an Amplify build hook of the storefront branch) when prerendered content
+    // changed. CloudFormation has no Amplify webhook resource (only App / Branch / Domain), and creating one would need a
+    // custom resource; the hook is therefore created once by hand and written here with put-secret-value (README).
+    // Until then the value is a JSON marker WITHOUT a "url" member: the backend treats it as "not configured" (no call,
+    // rebuild requests stay pending) and re-reads the secret on the next run. As for the tracking key, DO NOT change
+    // `generateSecretString` below: an update would overwrite the stored URL with a new placeholder.
+    this.siteRebuildWebhookSecretName = siteRebuildWebhookSecretName(config);
+    this.siteRebuildWebhookSecret = new secretsmanager.Secret(this, 'SiteRebuildWebhookSecret', {
+      secretName: this.siteRebuildWebhookSecretName,
+      description:
+        `Zladovce ${config.envName}: storefront rebuild webhook (Amplify build hook URL of the storefront branch). Value: ` +
+        'the https URL, or {"url":"<https URL>"}. Set with put-secret-value, see infrastructure/README.md. The ' +
+        'placeholder (no url) means "not configured": the outbox worker calls nothing.',
+      generateSecretString: {
+        secretStringTemplate: JSON.stringify({ status: SITE_REBUILD_PLACEHOLDER_MARKER }),
+        generateStringKey: 'filler',
+        excludePunctuation: true,
+        passwordLength: 16,
+      },
+      removalPolicy: config.site.retainRebuildWebhookSecretOnDelete ? RemovalPolicy.RETAIN : RemovalPolicy.DESTROY,
+    });
+
+    new CfnOutput(this, 'SiteRebuildWebhookSecretName', {
+      value: this.siteRebuildWebhookSecretName,
+      description: 'Secret with the storefront build hook URL (placeholder until set by hand: no rebuild calls)',
+    });
 
     /* ------------------------------------ SES ------------------------------------ */
 

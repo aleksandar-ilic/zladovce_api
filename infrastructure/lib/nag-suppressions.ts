@@ -143,6 +143,12 @@ export function applyNagSuppressions(environment: ZladovceEnvironment): void {
     'The tracking-code key encrypts codes inside queued outbox rows, and the backend reads one key (no key versions). ' +
       'Automatic rotation would make every queued e-mail undecryptable. Rotate by hand only with an empty outbox.',
   );
+  acknowledge(
+    notifications.siteRebuildWebhookSecret,
+    'AwsSolutions-SMG4',
+    'The value is an Amplify build hook URL created outside CloudFormation; Secrets Manager cannot rotate it (no ' +
+      'rotation Lambda exists for Amplify webhooks). Replace it by hand (create a new hook, put-secret-value, delete the old one).',
+  );
 
   /* ----------------------------------- API ----------------------------------- */
 

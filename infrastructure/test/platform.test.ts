@@ -90,7 +90,9 @@ describe('tags, outputs and stack settings', () => {
     expectTags(onlyResource(dev.media, 'AWS::S3::Bucket').resource, 'dev');
     expectTags(onlyResource(prod.media, 'AWS::CloudFront::Distribution').resource, 'prod');
     expectTags(onlyResource(prod.observability, 'AWS::SNS::Topic').resource, 'prod');
-    expectTags(onlyResource(prod.notifications, 'AWS::SecretsManager::Secret').resource, 'prod');
+    for (const secret of Object.values(prod.notifications.findResources('AWS::SecretsManager::Secret'))) {
+      expectTags(secret, 'prod');
+    }
     expectTags(onlyResource(prod.notifications, 'AWS::SES::ConfigurationSet').resource, 'prod');
     for (const fn of [
       ...Object.values(prod.api.findResources('AWS::Lambda::Function')),

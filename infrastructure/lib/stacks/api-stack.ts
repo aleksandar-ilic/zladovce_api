@@ -14,6 +14,7 @@ import * as s3 from 'aws-cdk-lib/aws-s3';
 import { Construct } from 'constructs';
 import {
   allCorsOrigins,
+  COGNITO_ADMIN_ACTIONS,
   CREATE_ORDER_ROUTE_PATH,
   EnvironmentConfig,
   MEDIA_PREFIX,
@@ -34,11 +35,13 @@ export interface ApiStackProps extends StackProps {
   readonly lambdaSecurityGroup: ec2.ISecurityGroup;
   readonly database: DatabaseStack;
   readonly userPoolId: string;
+  /** ARN of the environment's admin user pool: the only resource of the Cognito administration permissions. */
+  readonly userPoolArn: string;
   readonly userPoolClientId: string;
   readonly jwtIssuerUrl: string;
   readonly mediaBucket: s3.IBucket;
   readonly mediaBaseUrl: string;
-  /** Tracking-key secret and SES identity / configuration set. */
+  /** Tracking-key and rebuild-webhook secrets, SES identity / configuration set. */
   readonly notifications: NotificationsStack;
 }
 
@@ -58,7 +61,7 @@ export const CREATE_ORDER_ROUTE_KEY = `POST ${CREATE_ORDER_ROUTE_PATH}`;
  * The migration runner lives in MigrationStack so that the pipeline can deploy and
  * run it BEFORE this stack publishes a new API version.
  *
- * Extension point (later phases): Cognito admin permissions are added to `apiFunction.role`.
+ * The API role may manage administrators in this environment's user pool (Phase 7: invite, change group, disable).
  */
 export class ApiStack extends Stack {
   public readonly apiFunction: DotnetFunction;
@@ -148,6 +151,13 @@ export class ApiStack extends Stack {
         database.appConnectStatement(db.appUser),
         // Tracking codes are encrypted into outbox rows (and decrypted for an admin retry) with this key.
         readTrackingKey(),
+        // Administrators (OwnerOnly endpoints): AdminCreateUser sends Cognito's invitation, groups follow the role,
+        // deactivation disables the Cognito user. This environment's pool only (one account for all environments).
+        new iam.PolicyStatement({
+          sid: 'ManageAdministrators',
+          actions: [...COGNITO_ADMIN_ACTIONS],
+          resources: [props.userPoolArn],
+        }),
         // Media: the pre-signed POST is signed with this role, so the browser upload is authorised by
         // s3:PutObject on uploads/*. Attaching reads the manifest under media/; deleting an image (or
         // archiving/replacing a category image) deletes its renditions under media/.
@@ -345,9 +355,21 @@ export class ApiStack extends Stack {
       ...optional('Email__LogoUrl', email.logoUrl),
       ...optional('Email__Ses__ConfigurationSetName', notifications.configurationSetName),
       ...optional('Email__Dispatcher__BatchSize', worker.batchSize),
+      // Store logo in e-mails: {Media__BaseUrl}/media/logos/.../email.png (used only when it is https = CloudFront).
+      Media__BaseUrl: props.mediaBaseUrl,
+      // Storefront rebuild webhook (A14). A placeholder value (no URL) means "not configured": nothing is called.
+      Site__RebuildWebhookUrlSecretArn: notifications.siteRebuildWebhookSecret.secretArn,
     };
 
-    const statements: iam.PolicyStatement[] = [database.appConnectStatement(config.database.appUser), readTrackingKey];
+    const statements: iam.PolicyStatement[] = [
+      database.appConnectStatement(config.database.appUser),
+      readTrackingKey,
+      new iam.PolicyStatement({
+        sid: 'ReadSiteRebuildWebhook',
+        actions: ['secretsmanager:GetSecretValue'],
+        resources: [notifications.siteRebuildWebhookSecret.secretArn],
+      }),
+    ];
     if (email.enabled) {
       // validateConfig guarantees an identity (and therefore a configuration set) and a sender address.
       // SES v2 SendEmail is authorised against the sending identity and the configuration set (and, in the sandbox,

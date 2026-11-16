@@ -169,10 +169,15 @@ describe('IAM scoping (tracking key, SES)', () => {
     expect(connect).toHaveLength(1);
     expect(JSON.stringify(connect[0].Resource)).toContain('/zladovce_app');
 
+    // Two secrets, each by its own ARN: the tracking key and the storefront rebuild webhook (Phase 7).
     const secret = statements.filter((s) => JSON.stringify(s.Action).includes('secretsmanager'));
-    expect(secret).toHaveLength(1);
-    expect(secret[0].Action).toBe('secretsmanager:GetSecretValue');
-    expect(JSON.stringify(secret[0].Resource)).toMatch(/^\{"Fn::ImportValue":"Zladovce-Prod-Notifications:.*TrackingKeySecret.*"\}$/);
+    expect(secret).toHaveLength(2);
+    for (const statement of secret) expect(statement.Action).toBe('secretsmanager:GetSecretValue');
+    const secretResources = secret.map((s) => JSON.stringify(s.Resource));
+    expect(secretResources.some((r) => /^\{"Fn::ImportValue":"Zladovce-Prod-Notifications:.*TrackingKeySecret.*"\}$/.test(r))).toBe(true);
+    expect(
+      secretResources.some((r) => /^\{"Fn::ImportValue":"Zladovce-Prod-Notifications:.*SiteRebuildWebhookSecret.*"\}$/.test(r)),
+    ).toBe(true);
 
     const sesStatements = statements.filter((s) => JSON.stringify(s.Action).includes('ses:'));
     expect(sesStatements).toHaveLength(1);
@@ -204,7 +209,7 @@ describe('IAM scoping (tracking key, SES)', () => {
   test('dev (e-mail disabled): no SES permission at all', () => {
     const statements = roleStatements(dev.api, 'OutboxWorkerRole');
     expect(statements.some((s) => JSON.stringify(s.Action).includes('ses:'))).toBe(false);
-    expect(statements.filter((s) => s.Action === 'secretsmanager:GetSecretValue')).toHaveLength(1);
+    expect(statements.filter((s) => s.Action === 'secretsmanager:GetSecretValue')).toHaveLength(2);
   });
 
   test('sandbox recipients are added as identity ARNs', () => {
@@ -274,9 +279,12 @@ describe('notifications stack (tracking key, SES)', () => {
       [prod, 'prod', 'Retain'],
     ] as const) {
       const secrets = result.notifications.findResources('AWS::SecretsManager::Secret');
-      expect(Object.keys(secrets)).toHaveLength(1);
-      const secret = Object.values(secrets)[0] as any;
-      expect(secret.Properties.Name).toBe(`zladovce/${envName}/tracking-token-key`);
+      // Tracking key + storefront rebuild webhook (Phase 7).
+      expect(Object.keys(secrets)).toHaveLength(2);
+      const secret = Object.values(secrets).find(
+        (candidate: any) => candidate.Properties.Name === `zladovce/${envName}/tracking-token-key`,
+      ) as any;
+      expect(secret).toBeDefined();
       expect(secret.DeletionPolicy).toBe(policy);
       expect(secret.Properties.SecretString).toBeUndefined();
       const template = JSON.parse(secret.Properties.GenerateSecretString.SecretStringTemplate);
