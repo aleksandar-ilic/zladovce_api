@@ -113,7 +113,7 @@ public static class ApiHost
             policy.WithOrigins(corsOrigins)
                 .WithMethods("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS")
                 .WithHeaders([.. headers])
-                .WithExposedHeaders(CorrelationIdMiddleware.HeaderName, "Retry-After")
+                .WithExposedHeaders(CorrelationIdMiddleware.HeaderName, "Retry-After", "Content-Disposition")
                 .SetPreflightMaxAge(TimeSpan.FromMinutes(10));
         }));
 
