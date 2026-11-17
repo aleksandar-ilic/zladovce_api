@@ -26,6 +26,8 @@ For local work, clone `zladovce_web` either next to this repository or into a `f
 
 ## Documentation
 
+**Where we stopped and what comes next: [PROJECT_STATUS](docs/PROJECT_STATUS.md).**
+
 | Document | Contents (master spec sections) |
 |---|---|
 | [PROJECT_SPECIFICATION](docs/PROJECT_SPECIFICATION.md) | Business context, design system, storefront, products & inventory, cart & checkout, orders, tracking, shipping, emails, admin, blog & CMS, SEO, engineering rules (§1, §4–13, §16, §20) |
